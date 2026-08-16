@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Syspro.Api/Syspro.Api.csproj" />
+  <Project Path="Syspro.Tests/Syspro.Tests.csproj" />
+</Solution>

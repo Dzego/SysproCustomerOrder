@@ -1,0 +1,6 @@
+@Syspro.Api_HostAddress = http://localhost:5204
+
+GET {{Syspro.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
