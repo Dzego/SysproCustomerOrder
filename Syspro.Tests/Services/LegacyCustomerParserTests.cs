@@ -26,7 +26,7 @@ public class LegacyCustomerParserTests
     }
 
     [Fact]
-    public void Parse_InvalidDate_ThrowsFormatException()
+    public void Parse_InvalidDate_ThrowsLegacyCustomerParseException()
     {
         var line =
             "0000012345" +
@@ -35,6 +35,7 @@ public class LegacyCustomerParserTests
             "20211340" +
             "A ";
 
-        Assert.Throws<FormatException>(() => _parser.Parse(line));
+        Assert.Throws<LegacyCustomerParseException>(
+            () => _parser.Parse(line));
     }
 }

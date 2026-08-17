@@ -7,49 +7,86 @@ public class CustomerImportService : ICustomerImportService
 {
     private readonly LegacyCustomerParser _parser;
     private readonly ICustomerRepository _customerRepository;
+    private readonly IImportRepository _importRepository;
 
     public CustomerImportService(
         LegacyCustomerParser parser,
-        ICustomerRepository customerRepository)
+        ICustomerRepository customerRepository,
+        IImportRepository importRepository)
     {
         _parser = parser;
         _customerRepository = customerRepository;
+        _importRepository = importRepository;
     }
 
     public async Task ImportAsync(string filePath)
     {
+        var importLog = new ImportLog
+        {
+            StartedAt = DateTime.UtcNow
+        };
+
+        await _importRepository.AddLogAsync(importLog);
+
         var lines = await File.ReadAllLinesAsync(filePath);
 
-        foreach (var line in lines)
+        for (var index = 0; index < lines.Length; index++)
         {
-            var record = _parser.Parse(line);
+            var line = lines[index];
+            var lineNumber = index + 1;
 
-            var existingCustomer =
-                await _customerRepository.GetByLegacyCustomerIdAsync(
-                    record.LegacyCustomerId);
+            importLog.ProcessedCount++;
 
-            if (existingCustomer is null)
+            try
             {
-                var customer = new Customer
+                var record = _parser.Parse(line);
+
+                var existingCustomer =
+                    await _customerRepository.GetByLegacyCustomerIdAsync(
+                        record.LegacyCustomerId);
+
+                if (existingCustomer is null)
                 {
-                    LegacyCustomerId = record.LegacyCustomerId,
-                    Name = record.Name,
-                    Email = record.Email,
-                    SignupDate = record.SignupDate,
-                    Tier = record.Tier
-                };
+                    var customer = new Customer
+                    {
+                        LegacyCustomerId = record.LegacyCustomerId,
+                        Name = record.Name,
+                        Email = record.Email,
+                        SignupDate = record.SignupDate,
+                        Tier = record.Tier
+                    };
 
-                await _customerRepository.AddAsync(customer);
+                    await _customerRepository.AddAsync(customer);
+
+                    importLog.CreatedCount++;
+                }
+                else
+                {
+                    existingCustomer.Name = record.Name;
+                    existingCustomer.Email = record.Email;
+                    existingCustomer.SignupDate = record.SignupDate;
+                    existingCustomer.Tier = record.Tier;
+
+                    importLog.UpdatedCount++;
+                }
             }
-            else
+            catch (LegacyCustomerParseException exception)
             {
-                existingCustomer.Name = record.Name;
-                existingCustomer.Email = record.Email;
-                existingCustomer.SignupDate = record.SignupDate;
-                existingCustomer.Tier = record.Tier;
+                importLog.FailedCount++;
+
+                importLog.Errors.Add(new ImportError
+                {
+                    LineNumber = lineNumber,
+                    RawData = line,
+                    Reason = exception.Message
+                });
             }
+            
         }
 
+        importLog.CompletedAt = DateTime.UtcNow;
+
         await _customerRepository.SaveChangesAsync();
+        await _importRepository.SaveChangesAsync();
     }
 }

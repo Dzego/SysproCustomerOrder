@@ -9,13 +9,13 @@ public class LegacyCustomerParser
     {
         if (string.IsNullOrWhiteSpace(line))
         {
-            throw new ArgumentException("Line cannot be empty.");
+            throw new LegacyCustomerParseException("Line cannot be empty.");
         }
 
-        if (line.Length < 80)
+        if (line.Length != 80)
         {
-            throw new FormatException(
-                $"Invalid line length. Expected at least 80 characters but got {line.Length}.");
+            throw new LegacyCustomerParseException(
+                $"Invalid line length. Expected 80 characters but got {line.Length}.");
         }
 
         var legacyCustomerId = line.Substring(0, 10).Trim();
@@ -31,12 +31,14 @@ public class LegacyCustomerParser
                 DateTimeStyles.None,
                 out var signupDate))
         {
-            throw new FormatException($"Invalid signup date: {signupDateText}");
+             throw new LegacyCustomerParseException(
+                $"Invalid signup date: {signupDateText}");
         }
 
         if (tier is not ("A" or "B" or "C"))
         {
-            throw new FormatException($"Invalid tier: {tier}");
+            throw new LegacyCustomerParseException(
+                $"Invalid tier: {tier}");
         }
 
         return new LegacyCustomerRecord
