@@ -1,5 +1,6 @@
 using Syspro.Api.Models;
 using Syspro.Api.Repositories;
+using Syspro.Api.DTOs;
 
 namespace Syspro.Api.Services;
 
@@ -19,7 +20,7 @@ public class CustomerImportService : ICustomerImportService
         _importRepository = importRepository;
     }
 
-    public async Task ImportAsync(string filePath)
+    public async Task<ImportResult> ImportAsync(string filePath)
     {
         var importLog = new ImportLog
         {
@@ -88,5 +89,12 @@ public class CustomerImportService : ICustomerImportService
 
         await _customerRepository.SaveChangesAsync();
         await _importRepository.SaveChangesAsync();
+        return new ImportResult
+        {
+            Processed = importLog.ProcessedCount,
+            Created = importLog.CreatedCount,
+            Updated = importLog.UpdatedCount,
+            Failed = importLog.FailedCount
+        };
     }
 }
