@@ -89,6 +89,7 @@ public class CustomerImportService : ICustomerImportService
 
         await _customerRepository.SaveChangesAsync();
         await _importRepository.SaveChangesAsync();
+        
         return new ImportResult
         {
             Processed = importLog.ProcessedCount,
