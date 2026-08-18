@@ -1,57 +1,140 @@
 # SYSPRO Legacy Customer Import & Order API
 
-A .NET 8 backend application that imports customer data from a legacy fixed-width file into SQL Server and exposes REST API endpoints for creating and retrieving customer orders.
+A .NET 8 backend application that imports customer data from a legacy fixed-width file into SQL Server and exposes REST API endpoints for creating, retrieving and aggregating customer orders.
+
+The solution was developed as part of the SYSPRO Intermediate .NET Developer take-home assessment.
 
 The project demonstrates:
 
 - Fixed-width legacy data parsing
-- Repeatable customer imports
+- Repeatable and idempotent-style customer imports
 - Row-level import error handling
+- Repository Pattern for the legacy import workflow
 - SQL Server persistence using Entity Framework Core
+- Entity Framework Core migrations
 - REST API design using ASP.NET Core Controllers
-- Order creation and retrieval
-- Computed order totals
+- Order creation using either internal or legacy customer identifiers
+- Order retrieval
+- Computed order and line totals
 - Customer order aggregation over a date range
 - Basic validation and error handling
-- Automated testing with xUnit
+- Automated testing using xUnit
 
 ---
 
-## Technology Stack
+# Technology Stack
 
 - C#
 - .NET 8
 - ASP.NET Core Web API
 - Entity Framework Core
 - SQL Server 2022
-- Docker
+- Docker / Docker Compose
 - xUnit
+- EF Core InMemory provider for isolated service tests
 
 ---
 
-## Project Structure
+# Project Structure
 
 ```text
 SysproCustomerOrder/
 │
 ├── Syspro.Api/
 │   ├── Controllers/
+│   │   ├── CustomersController.cs
+│   │   ├── ImportController.cs
+│   │   └── OrdersController.cs
+│   │
 │   ├── Data/
+│   │   └── AppDbContext.cs
+│   │
 │   ├── DTOs/
+│   │
 │   ├── LegacyData/
 │   │   └── customers_legacy.dat
+│   │
 │   ├── Migrations/
+│   │
 │   ├── Models/
+│   │
+│   ├── Repositories/
+│   │   ├── ICustomerRepository.cs
+│   │   ├── CustomerRepository.cs
+│   │   ├── IImportRepository.cs
+│   │   └── ImportRepository.cs
+│   │
 │   ├── Services/
+│   │   ├── CustomerImportService.cs
+│   │   ├── ICustomerImportService.cs
+│   │   ├── LegacyCustomerParser.cs
+│   │   ├── LegacyCustomerParseException.cs
+│   │   ├── IOrderService.cs
+│   │   └── OrderService.cs
+│   │
 │   └── Program.cs
 │
 ├── Syspro.Tests/
-│   └── Services/
+│   ├── Services/
+│   │   ├── LegacyCustomerParserTests.cs
+│   │   └── OrderServiceTests.cs
+│   │
+│   └── Api/
+│       └── OrdersApiTests.cs
+│
+├── docs/
+│   ├── application-architecture.png
+│   ├── legacy-import-flow.png
+│   └── erd.png
 │
 ├── docker-compose.yml
-├── SysproCustomerOrder.slnx
-└── README.md
+├── README.md
+├── SOLUTION.md
+└── SysproCustomerOrder.slnx
 ```
+
+> `OrdersApiTests.cs` represents the lightweight API integration test required by the assessment. If this test has not yet been added, remove it from the structure until it exists.
+
+---
+
+# Architecture
+
+The application uses a lightweight layered architecture.
+
+```text
+Client / Postman
+        |
+        v
+ASP.NET Core Controllers
+        |
+        v
+Application Services
+        |
+        +----------------------------+
+        |                            |
+        v                            v
+Legacy Import                  Order Logic
+        |                            |
+        v                            |
+Repository Interfaces                |
+        |                            |
+        v                            |
+Repository Implementations           |
+        |                            |
+        +-------------+--------------+
+                      |
+                      v
+                 AppDbContext
+                      |
+                      v
+                  SQL Server
+```
+
+The Repository Pattern is used specifically for the legacy customer import workflow.
+
+The order workflow currently uses `AppDbContext` directly from `OrderService`. This was an intentional scope and complexity decision rather than introducing repository abstractions purely for architectural symmetry.
+
+The detailed architecture decisions and trade-offs are documented in `SOLUTION.md`.
 
 ---
 
@@ -65,7 +148,7 @@ Make sure the following are installed:
 - Docker Desktop
 - Git
 
-You can verify the .NET installation with:
+Verify the .NET installation:
 
 ```bash
 dotnet --version
@@ -84,15 +167,15 @@ cd SysproCustomerOrder
 
 ## 2. Start SQL Server
 
-The project uses SQL Server running in Docker.
+SQL Server runs locally using Docker Compose.
 
-Start the database container:
+From the repository root:
 
 ```bash
 docker compose up -d
 ```
 
-Confirm that SQL Server is running:
+Confirm that the container is running:
 
 ```bash
 docker ps
@@ -108,9 +191,9 @@ The application expects a SQL Server connection string named:
 DefaultConnection
 ```
 
-For local development, database credentials should be configured outside source control.
+Database credentials should not be committed to source control.
 
-One option is .NET User Secrets.
+For local development, .NET User Secrets can be used.
 
 From the API project:
 
@@ -119,7 +202,7 @@ cd Syspro.Api
 dotnet user-secrets init
 ```
 
-Then configure the connection string:
+Configure the connection string:
 
 ```bash
 dotnet user-secrets set "ConnectionStrings:DefaultConnection" \
@@ -130,7 +213,7 @@ Replace `<YOUR_PASSWORD>` with the password configured for your local SQL Server
 
 ---
 
-## 4. Apply the Database Migrations
+## 4. Apply Database Migrations
 
 From the `Syspro.Api` directory:
 
@@ -138,9 +221,9 @@ From the `Syspro.Api` directory:
 dotnet ef database update
 ```
 
-This creates the database and required tables using the included Entity Framework Core migrations.
+This creates the database using the included Entity Framework Core migrations.
 
-The main tables are:
+The main application tables are:
 
 ```text
 Customers
@@ -160,7 +243,7 @@ From the `Syspro.Api` directory:
 dotnet run
 ```
 
-The terminal will display the local address of the API.
+The terminal will display the local URL.
 
 For example:
 
@@ -174,7 +257,7 @@ If a different port is displayed, use the URL shown in the terminal.
 
 # Legacy Customer Import
 
-The initial customer data is loaded from the supplied legacy fixed-width file.
+The initial customer data is loaded from the supplied fixed-width legacy file.
 
 The file is located at:
 
@@ -184,7 +267,11 @@ Syspro.Api/LegacyData/customers_legacy.dat
 
 Each line represents one customer.
 
+---
+
 ## Fixed-Width Format
+
+The parser reads each field according to its fixed character positions.
 
 ```text
 Positions 1-10   LegacyCustomerId
@@ -202,9 +289,9 @@ Example:
 0000012347Acme Corp                     ops@acmecorp.example          20190501C 
 ```
 
-Spaces are significant because fields are extracted according to their fixed positions.
+Spaces are significant because the parser extracts fields according to character positions.
 
-`LegacyCustomerId` is stored as a string so values such as:
+`LegacyCustomerId` is stored as a string so identifiers such as:
 
 ```text
 0000012345
@@ -214,9 +301,9 @@ retain their leading zeros.
 
 ---
 
-## Run the Customer Import
+# Run the Customer Import
 
-### Endpoint
+## Endpoint
 
 ```http
 POST /api/import/customers
@@ -230,7 +317,7 @@ Example:
 POST http://localhost:5204/api/import/customers
 ```
 
-### Example Successful Response
+## Example Successful Response
 
 ```json
 {
@@ -241,31 +328,118 @@ POST http://localhost:5204/api/import/customers
 }
 ```
 
-The exact `created` and `updated` counts depend on the current state of the database.
+The exact `created` and `updated` values depend on the current state of the database.
 
 ---
 
-## Import Behaviour
+# Import Behaviour
 
 The import is designed to be repeatable.
 
-Customers are matched using their `LegacyCustomerId`.
+Customers are matched using `LegacyCustomerId`.
 
-If a customer does not already exist, a new customer is created.
+If the customer does not exist:
 
-If the `LegacyCustomerId` already exists, the existing customer is updated rather than creating a duplicate.
+```text
+Create Customer
+```
 
-This means running the same legacy file multiple times does not create duplicate customers.
+If the customer already exists:
+
+```text
+Update Customer
+```
+
+This means running the same legacy file repeatedly does not create duplicate customers.
+
+A unique database constraint on `LegacyCustomerId` provides an additional database-level safeguard against duplicates.
 
 ---
 
-## Invalid Legacy Rows
+# Repository Pattern for Import Persistence
 
-An invalid row does not stop the entire import.
+The legacy customer import uses focused repository abstractions:
 
-The import continues processing the remaining rows and records information about the failed row.
+```text
+ICustomerRepository
+IImportRepository
+```
 
-Each import run is stored in `ImportLogs`, including:
+with concrete implementations:
+
+```text
+CustomerRepository
+ImportRepository
+```
+
+The flow is:
+
+```text
+CustomerImportService
+        |
+        +----------------------+
+        |                      |
+        v                      v
+ICustomerRepository      IImportRepository
+        |                      |
+        v                      v
+CustomerRepository       ImportRepository
+        |                      |
+        +----------+-----------+
+                   |
+                   v
+              AppDbContext
+                   |
+                   v
+               SQL Server
+```
+
+This keeps `CustomerImportService` focused on the import workflow rather than Entity Framework Core query details.
+
+The service is responsible for:
+
+- Parsing legacy records
+- Determining whether customers should be created or updated
+- Maintaining import counts
+- Handling invalid legacy rows
+- Coordinating the import workflow
+
+The repositories are responsible for persistence operations.
+
+A generic `IRepository<T>` abstraction was deliberately avoided. The repositories expose focused operations required by the application rather than wrapping every EF Core CRUD operation.
+
+The Repository Pattern is currently used for the import workflow only.
+
+`OrderService` uses `AppDbContext` directly because the current order persistence operations are relatively focused and straightforward.
+
+Adding `IOrderRepository` and `OrderRepository` purely for structural consistency would introduce additional abstraction without currently removing meaningful complexity.
+
+More detail about this trade-off is provided in `SOLUTION.md`.
+
+---
+
+# Invalid Legacy Rows
+
+A malformed row does not stop the complete import.
+
+Instead:
+
+```text
+Invalid row
+    |
+    v
+Record ImportError
+    |
+    v
+Increment FailedCount
+    |
+    v
+Continue with next row
+```
+
+Every import execution is represented by an `ImportLog`.
+
+The log records:
 
 ```text
 ProcessedCount
@@ -276,7 +450,9 @@ StartedAt
 CompletedAt
 ```
 
-Individual failed rows are stored in `ImportErrors`, including:
+Individual failed rows are stored in `ImportErrors`.
+
+Each error records:
 
 ```text
 LineNumber
@@ -284,7 +460,7 @@ RawData
 Reason
 ```
 
-Examples of validation failures include:
+Example parsing errors include:
 
 ```text
 Invalid signup date: 20241340
@@ -304,6 +480,14 @@ B
 C
 ```
 
+Parsing failures are represented by the custom:
+
+```text
+LegacyCustomerParseException
+```
+
+This allows the import workflow to distinguish expected legacy parsing failures from unrelated application failures.
+
 ---
 
 # Order API
@@ -319,15 +503,15 @@ An order must contain at least one item.
 
 ---
 
-## Create an Order Using LegacyCustomerId
+# Create an Order Using LegacyCustomerId
 
-### Endpoint
+## Endpoint
 
 ```http
 POST /api/orders
 ```
 
-### Example Request
+## Example Request
 
 ```json
 {
@@ -353,11 +537,11 @@ POST /api/orders
 
 ---
 
-## Create an Order Using Internal CustomerId
+# Create an Order Using Internal CustomerId
 
-The API also supports the internal database customer ID.
+The same endpoint can identify a customer using the application's internal database ID.
 
-### Example Request
+## Example Request
 
 ```json
 {
@@ -381,7 +565,7 @@ The API also supports the internal database customer ID.
 }
 ```
 
-### Example Response — 201 Created
+## Example Response — 201 Created
 
 ```json
 {
@@ -412,7 +596,7 @@ The API also supports the internal database customer ID.
 }
 ```
 
-Order timestamps are generated by the backend using UTC.
+Order timestamps are generated by the backend in UTC.
 
 ---
 
@@ -420,7 +604,7 @@ Order timestamps are generated by the backend using UTC.
 
 Order totals are calculated by the backend rather than supplied by the client.
 
-Each item's total is:
+For each item:
 
 ```text
 LineTotal = UnitPrice × Quantity
@@ -429,7 +613,7 @@ LineTotal = UnitPrice × Quantity
 The complete order total is:
 
 ```text
-Order Total = Sum of all LineTotals
+OrderTotal = Sum of all LineTotals
 ```
 
 For example:
@@ -444,13 +628,13 @@ R350 × 2 = R700
 Order Total = R2150
 ```
 
-The calculated totals are returned in the API response.
+This ensures the total returned by the API is derived from the actual order items.
 
 ---
 
 # Retrieve an Order by Id
 
-### Endpoint
+## Endpoint
 
 ```http
 GET /api/orders/{id}
@@ -462,7 +646,7 @@ Example:
 GET http://localhost:5204/api/orders/1
 ```
 
-### Example Response — 200 OK
+## Example Response — 200 OK
 
 ```json
 {
@@ -493,15 +677,21 @@ GET http://localhost:5204/api/orders/1
 }
 ```
 
-The response contains both the individual item totals and the computed total for the complete order.
+The response contains both individual line totals and the computed complete order total.
+
+If the order does not exist, the API returns:
+
+```text
+404 Not Found
+```
 
 ---
 
 # Customer Order Totals
 
-The API can return customers with their aggregate order totals over a specified date range.
+The API returns customers with their aggregate order totals over a specified date range.
 
-### Endpoint
+## Endpoint
 
 ```http
 GET /api/customers/totals?fromDate={fromDate}&toDate={toDate}
@@ -515,7 +705,7 @@ GET http://localhost:5204/api/customers/totals?fromDate=2026-08-18&toDate=2026-0
 
 Both dates are supplied as query parameters.
 
-### Example Response
+## Example Response
 
 ```json
 [
@@ -540,7 +730,7 @@ Both dates are supplied as query parameters.
 ]
 ```
 
-Orders belonging to the same customer are aggregated together.
+If a customer has multiple orders within the requested range, those orders are aggregated.
 
 The results are ordered by total amount in descending order.
 
@@ -559,6 +749,8 @@ Validation includes:
 - SKU is required.
 - Currency must contain three characters.
 - `fromDate` cannot be later than `toDate`.
+
+---
 
 ## Customer Not Found
 
@@ -615,6 +807,8 @@ Expected response:
 
 An item quantity must be greater than zero.
 
+Example:
+
 ```json
 {
   "legacyCustomerId": "0000012345",
@@ -642,6 +836,8 @@ Expected response:
 ## Invalid Unit Price
 
 Unit prices cannot be negative.
+
+Example:
 
 ```json
 {
@@ -709,12 +905,99 @@ Run all tests from the repository root:
 dotnet test
 ```
 
-The test suite covers key application behaviour, including:
+The test suite is organised by responsibility:
 
-- Parsing a valid fixed-width legacy customer row
-- Handling invalid legacy customer data
-- Order total calculation
-- API behaviour for a key endpoint
+```text
+Syspro.Tests/
+├── Services/
+│   ├── LegacyCustomerParserTests.cs
+│   └── OrderServiceTests.cs
+│
+└── Api/
+    └── OrdersApiTests.cs
+```
+
+---
+
+## Legacy Customer Parser Tests
+
+`LegacyCustomerParserTests` verifies the fixed-width parsing logic.
+
+Coverage includes:
+
+- Valid fixed-width legacy customer line
+- Invalid signup date
+- Invalid tier
+- Invalid line length
+- Empty input
+
+Invalid parsing scenarios are expected to throw:
+
+```text
+LegacyCustomerParseException
+```
+
+---
+
+## Order Service Tests
+
+`OrderServiceTests` verifies order business behaviour.
+
+Coverage includes:
+
+- Correct total for an order containing multiple items
+- Correct individual line totals
+- Customer lookup using `LegacyCustomerId`
+- Currency normalization
+- Unknown customer handling
+- Empty order items
+- Invalid item quantities
+
+The service tests use the EF Core InMemory provider.
+
+Each test creates an isolated database using:
+
+```csharp
+.UseInMemoryDatabase(Guid.NewGuid().ToString())
+```
+
+This prevents tests from sharing database state and allows service tests to run without a local SQL Server instance.
+
+---
+
+## API Integration Test
+
+The assessment requires at least one API pathway test.
+
+The selected pathway is:
+
+```text
+Seed existing customer
+        |
+        v
+POST /api/orders
+        |
+        v
+201 Created
+        |
+        v
+Read returned Order Id
+        |
+        v
+GET /api/orders/{id}
+        |
+        v
+200 OK
+        |
+        v
+Verify items and computed totals
+```
+
+The lightweight integration test uses `WebApplicationFactory<Program>` to exercise the real ASP.NET Core HTTP pipeline while using an isolated test database.
+
+This verifies more than calling a controller method directly because it exercises routing, dependency injection, JSON serialization and the controller/service integration together.
+
+> Remove this subsection until the integration test has been implemented and is passing.
 
 ---
 
@@ -746,9 +1029,15 @@ ImportError
 
 A customer can have many orders.
 
-An order belongs to one customer and can contain many order items.
+An order belongs to one customer and contains one or more order items.
 
 An import log represents one execution of the legacy customer import and can contain multiple import errors.
+
+The complete ERD is documented in:
+
+```text
+docs/erd.png
+```
 
 ---
 
@@ -758,27 +1047,92 @@ An import log represents one execution of the legacy customer import and can con
 
 `LegacyCustomerId` is stored separately from the application's internal customer `Id`.
 
-It is stored as a string because legacy identifiers may contain leading zeros.
+It is stored as a string because leading zeros are significant.
 
-It also has a unique database constraint to prevent duplicate legacy customers.
+For example:
+
+```text
+Internal Id:       1003
+LegacyCustomerId:  0000012349
+```
+
+A unique database constraint is used to prevent duplicate legacy customer identifiers.
+
+---
 
 ## Fixed-Width Parsing
 
 Legacy records are parsed according to their character positions rather than using delimiters.
 
-The parser is kept separate from persistence logic so parsing can be tested independently.
+Parsing is separated from persistence so that:
+
+- The parser has a single responsibility.
+- Parsing can be tested independently.
+- The parser does not require database access.
+- Import orchestration remains separate from file-format concerns.
+
+---
 
 ## Repeatable Imports
 
-`LegacyCustomerId` is used to determine whether a customer should be created or updated.
+`LegacyCustomerId` determines whether an imported customer should be created or updated.
 
-This allows the same legacy file to be imported repeatedly without creating duplicate customers.
+This allows the same legacy file to be processed repeatedly without creating duplicate customers.
+
+---
 
 ## Import Error Handling
 
-A malformed legacy row does not stop the entire import.
+A malformed legacy row does not terminate the complete import.
 
-The error is recorded and processing continues with the next row.
+The error is recorded and processing continues with the next line.
+
+This allows valid customers later in the file to still be imported.
+
+---
+
+## Repository Pattern
+
+The Repository Pattern is used for the legacy customer import workflow.
+
+`CustomerImportService` depends on:
+
+```text
+ICustomerRepository
+IImportRepository
+```
+
+rather than querying `AppDbContext` directly.
+
+The concrete repository implementations encapsulate EF Core persistence.
+
+This provides a clear separation between:
+
+```text
+Import orchestration
+        |
+Repository abstraction
+        |
+Persistence implementation
+```
+
+The repository interfaces are domain-focused rather than using a generic `IRepository<T>` abstraction.
+
+This keeps repository methods aligned with actual application requirements.
+
+### Why repositories are not used for orders
+
+The Repository Pattern was not applied mechanically across every service.
+
+`OrderService` currently uses `AppDbContext` directly because the order persistence requirements are relatively small and straightforward.
+
+Adding an `IOrderRepository` purely to make the architecture symmetrical would introduce another layer without currently removing significant complexity.
+
+If the order domain grows to contain more complex persistence rules or queries, a focused order repository can be introduced later.
+
+This trade-off is discussed in greater detail in `SOLUTION.md`.
+
+---
 
 ## Order Totals
 
@@ -788,17 +1142,86 @@ Order totals are derived from the order items:
 UnitPrice × Quantity
 ```
 
-Totals are calculated when producing API responses rather than accepting a total supplied by the client.
+Totals are calculated by the backend rather than accepted from the client.
 
-## Timestamps
+This avoids trusting client-supplied totals and prevents duplicated total state from becoming inconsistent with the underlying order items.
 
-Order timestamps are generated by the backend in UTC to provide consistent timezone-independent storage.
+---
+
+## UTC Timestamps
+
+Order timestamps are generated by the backend using UTC.
+
+```csharp
+DateTime.UtcNow
+```
+
+UTC provides consistent timezone-independent persistence.
+
+Conversion to a user's local timezone is considered a presentation concern.
+
+---
+
+## EF Core Migrations
+
+Entity Framework Core migrations are used to create and evolve the database schema.
+
+This was selected instead of maintaining a separate SQL creation script because the schema remains closely aligned with the entity configuration and can be reproduced locally using:
+
+```bash
+dotnet ef database update
+```
+
+---
+
+# Architecture and Design Documentation
+
+More detailed information about the architecture, persistence decisions, Repository Pattern trade-offs and testing strategy is available in:
+
+```text
+SOLUTION.md
+```
+
+Supporting diagrams are stored in:
+
+```text
+docs/
+```
+
+including:
+
+```text
+application-architecture.png
+legacy-import-flow.png
+erd.png
+```
+
+---
+
+# Scope
+
+The implementation intentionally focuses on the requirements of the assessment.
+
+The solution avoids introducing unnecessary infrastructure such as:
+
+```text
+CQRS
+MediatR
+Generic repositories
+Message queues
+Caching
+Authentication
+Frontend application
+Product catalogue
+```
+
+These patterns and technologies may be useful in a larger system, but introducing them here without a demonstrated requirement would increase complexity without improving the core migration and order workflows.
 
 ---
 
 # Stopping the Local Environment
 
-Stop the SQL Server container:
+Stop SQL Server while keeping the container:
 
 ```bash
 docker compose stop
@@ -810,4 +1233,4 @@ To stop and remove the container:
 docker compose down
 ```
 
-The SQL Server data is persisted using the configured Docker volume.
+The SQL Server data remains persisted using the configured Docker volume.
