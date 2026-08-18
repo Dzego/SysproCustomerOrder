@@ -3,11 +3,14 @@ services:
     image: mcr.microsoft.com/mssql/server:2022-latest
     platform: linux/amd64
     container_name: syspro-sqlserver
+
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "SysproPassw0rd@2026!"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+
     ports:
       - "1433:1433"
+
     volumes:
       - syspro_sql_data:/var/opt/mssql
 
