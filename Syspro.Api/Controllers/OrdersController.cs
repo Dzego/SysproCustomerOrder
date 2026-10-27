@@ -1,6 +1,8 @@
+using FluentValidation;
 using Microsoft.AspNetCore.Mvc;
 using Syspro.Api.DTOs;
 using Syspro.Api.Services;
+using Syspro.Api.Validators;
 
 namespace Syspro.Api.Controllers;
 
@@ -9,15 +11,28 @@ namespace Syspro.Api.Controllers;
 public sealed class OrdersController : ControllerBase
 {
     private readonly IOrderService _orderService;
+    private readonly IValidator<CreateOrderRequest> _createOrderValidator;
 
-    public OrdersController(IOrderService orderService)
+    public OrdersController(
+        IOrderService orderService,
+        IValidator<CreateOrderRequest> createOrderValidator)
     {
         _orderService = orderService;
+        _createOrderValidator = createOrderValidator;
     }
 
     [HttpPost]
     public async Task<IActionResult> CreateOrder(CreateOrderRequest request)
     {
+        var validationResult = await _createOrderValidator.ValidateAsync(request);
+
+        if (!validationResult.IsValid)
+        {
+            validationResult.AddToModelState(ModelState);
+
+            return ValidationProblem(ModelState);
+        }
+
         try
         {
             var result = await _orderService.CreateAsync(request);

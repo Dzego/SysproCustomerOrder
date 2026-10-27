@@ -1,23 +1,25 @@
 namespace Syspro.Api.DTOs;
 
+// Members default instead of using 'required' so that missing JSON properties
+// reach CreateOrderRequestValidator and are reported as field-level errors.
 public sealed class CreateOrderRequest
 {
     public int? CustomerId { get; init; }
 
     public string? LegacyCustomerId { get; init; }
 
-    public required string Currency { get; init; }
+    public string Currency { get; init; } = string.Empty;
 
-    public required string Status { get; init; }
+    public string Status { get; init; } = string.Empty;
 
-    public required List<CreateOrderItemRequest> Items { get; init; }
+    public List<CreateOrderItemRequest> Items { get; init; } = [];
 }
 
 public sealed class CreateOrderItemRequest
 {
-    public required string Sku { get; init; }
+    public string Sku { get; init; } = string.Empty;
 
-    public required string Description { get; init; }
+    public string Description { get; init; } = string.Empty;
 
     public decimal UnitPrice { get; init; }
 
