@@ -16,6 +16,13 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
     private readonly string _filePath = Path.GetTempFileName();
     private readonly FakeCustomerRepository _customerRepository = new();
     private readonly FakeImportRepository _importRepository = new();
+    private readonly ImportLog _job = new()
+    {
+        Status = ImportJobStatus.Processing,
+        CreatedAt = DateTime.UtcNow,
+        StartedAt = DateTime.UtcNow,
+        AttemptCount = 1
+    };
     private readonly CustomerImportService _service;
 
     public CustomerImportServiceCancellationTests()
@@ -72,16 +79,11 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
     {
         public List<CancellationToken> ReceivedTokens { get; } = [];
 
-        public ImportLog? ImportLog { get; private set; }
-
         public int SaveCount { get; private set; }
 
         public Task AddLogAsync(ImportLog importLog, CancellationToken cancellationToken)
         {
-            ReceivedTokens.Add(cancellationToken);
-            ImportLog = importLog;
-
-            return Task.CompletedTask;
+            throw new NotSupportedException();
         }
 
         public Task SaveChangesAsync(CancellationToken cancellationToken)
@@ -90,6 +92,34 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
             SaveCount++;
 
             return Task.CompletedTask;
+        }
+
+        public Task<ImportLog?> GetJobAsync(int id, CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<ImportLog?> ClaimNextPendingJobAsync(CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task ReleaseJobAsync(int id, CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task MarkJobFailedAsync(int id, string reason, CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<InterruptedJobRecovery> RecoverInterruptedJobsAsync(
+            int maxAttempts,
+            string exhaustedReason,
+            CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
         }
     }
 
@@ -102,11 +132,11 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
         using var cancellationSource = new CancellationTokenSource();
 
         // Act
-        await _service.ImportAsync(_filePath, cancellationSource.Token);
+        await _service.ImportAsync(_job, _filePath, cancellationSource.Token);
 
         // Assert
         Assert.Equal(3, _customerRepository.ReceivedTokens.Count);
-        Assert.Equal(2, _importRepository.ReceivedTokens.Count);
+        Assert.Single(_importRepository.ReceivedTokens);
 
         Assert.All(
             _customerRepository.ReceivedTokens.Concat(_importRepository.ReceivedTokens),
@@ -122,7 +152,7 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
         var cancelledToken = new CancellationToken(canceled: true);
 
         // Act
-        var action = () => _service.ImportAsync(_filePath, cancelledToken);
+        var action = () => _service.ImportAsync(_job, _filePath, cancelledToken);
 
         // Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);
@@ -140,7 +170,7 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
         _customerRepository.OnLookup = cancellationSource.Cancel;
 
         // Act
-        var action = () => _service.ImportAsync(_filePath, cancellationSource.Token);
+        var action = () => _service.ImportAsync(_job, _filePath, cancellationSource.Token);
 
         // Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);
@@ -161,14 +191,14 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
             throw new OperationCanceledException(cancellationSource.Token);
 
         // Act
-        var action = () => _service.ImportAsync(_filePath, cancellationSource.Token);
+        var action = () => _service.ImportAsync(_job, _filePath, cancellationSource.Token);
 
         // Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);
 
-        Assert.NotNull(_importRepository.ImportLog);
-        Assert.Equal(0, _importRepository.ImportLog.FailedCount);
-        Assert.Empty(_importRepository.ImportLog.Errors);
+        Assert.Equal(ImportJobStatus.Processing, _job.Status);
+        Assert.Equal(0, _job.FailedCount);
+        Assert.Empty(_job.Errors);
         Assert.Equal(0, _importRepository.SaveCount);
     }
 }

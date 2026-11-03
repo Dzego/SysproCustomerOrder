@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Syspro.Api.BackgroundJobs;
 using Syspro.Api.Data;
 using Syspro.Api.DTOs;
 using Syspro.Api.Models;
@@ -44,6 +45,8 @@ public sealed class OrdersControllerTests : IDisposable
 
             builder.ConfigureServices(services =>
             {
+                services.Configure<CustomerImportWorkerOptions>(options => options.Enabled = false);
+
                 services.RemoveAll<DbContextOptions<AppDbContext>>();
 
                 services.AddDbContext<AppDbContext>(options =>

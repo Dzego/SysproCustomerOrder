@@ -32,7 +32,9 @@ public abstract class SqlServerTestBase : IAsyncLifetime
         await dbContext.Database.MigrateAsync();
     }
 
-    public async Task DisposeAsync()
+    // xUnit calls this before Dispose, so a test class that owns anything using the
+    // database, such as a running worker, must stop it first by overriding this.
+    public virtual async Task DisposeAsync()
     {
         await using var dbContext = CreateDbContext();
 
@@ -56,6 +58,22 @@ public abstract class SqlServerTestBase : IAsyncLifetime
         await using var dbContext = CreateDbContext();
 
         return await query(dbContext);
+    }
+
+    protected async Task<ImportLog> AddPendingJobAsync(DateTime? createdAt = null)
+    {
+        await using var dbContext = CreateDbContext();
+
+        var job = new ImportLog
+        {
+            Status = ImportJobStatus.Pending,
+            CreatedAt = createdAt ?? DateTime.UtcNow
+        };
+
+        dbContext.ImportLogs.Add(job);
+        await dbContext.SaveChangesAsync();
+
+        return job;
     }
 
     protected async Task<Customer> AddCustomerAsync(

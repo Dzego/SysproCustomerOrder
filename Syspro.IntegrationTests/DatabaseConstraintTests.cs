@@ -143,7 +143,16 @@ public sealed class DatabaseConstraintTests(SqlServerFixture fixture) : SqlServe
     {
         await using (var dbContext = CreateDbContext())
         {
-            var log = new ImportLog { StartedAt = DateTime.UtcNow };
+            var now = DateTime.UtcNow;
+
+            var log = new ImportLog
+            {
+                Status = ImportJobStatus.Completed,
+                CreatedAt = now,
+                StartedAt = now,
+                CompletedAt = now
+            };
+
             log.Errors.Add(new ImportError { LineNumber = 1, RawData = "raw", Reason = "reason" });
 
             dbContext.ImportLogs.Add(log);

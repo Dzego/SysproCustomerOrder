@@ -38,7 +38,9 @@ public sealed class SlowQueryInterceptor(string? onlyCommandsContaining = null) 
 }
 
 // Tells a test that the API has started running a query.
-public sealed class SignalOnQueryInterceptor(TaskCompletionSource signal) : DbCommandInterceptor
+public sealed class SignalOnQueryInterceptor(
+    TaskCompletionSource signal,
+    string? onlyCommandsContaining = null) : DbCommandInterceptor
 {
     public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
         DbCommand command,
@@ -46,8 +48,35 @@ public sealed class SignalOnQueryInterceptor(TaskCompletionSource signal) : DbCo
         InterceptionResult<DbDataReader> result,
         CancellationToken cancellationToken = default)
     {
-        signal.TrySetResult();
+        if (onlyCommandsContaining is null ||
+            command.CommandText.Contains(onlyCommandsContaining, StringComparison.OrdinalIgnoreCase))
+        {
+            signal.TrySetResult();
+        }
 
         return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+    }
+}
+
+// Runs an action just before the first UPDATE, which lets a test place a competing
+// worker in the gap between another worker's read and its update.
+public sealed class BeforeFirstUpdateInterceptor(Func<Task> action) : DbCommandInterceptor
+{
+    private bool _hasRun;
+
+    public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<int> result,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_hasRun && command.CommandText.Contains("UPDATE", StringComparison.OrdinalIgnoreCase))
+        {
+            _hasRun = true;
+
+            await action();
+        }
+
+        return await base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
     }
 }

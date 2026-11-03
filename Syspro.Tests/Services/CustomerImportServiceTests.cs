@@ -48,11 +48,29 @@ public sealed class CustomerImportServiceTests : IDisposable
                tier.PadRight(2);
     }
 
+    private async Task<ImportLog> AddClaimedJobAsync()
+    {
+        var now = DateTime.UtcNow;
+
+        var job = new ImportLog
+        {
+            Status = ImportJobStatus.Processing,
+            CreatedAt = now,
+            StartedAt = now,
+            AttemptCount = 1
+        };
+
+        _dbContext.ImportLogs.Add(job);
+        await _dbContext.SaveChangesAsync();
+
+        return job;
+    }
+
     private async Task<Syspro.Api.DTOs.ImportResult> ImportAsync(params string[] lines)
     {
         await File.WriteAllLinesAsync(_filePath, lines);
 
-        return await _service.ImportAsync(_filePath, CancellationToken.None);
+        return await _service.ImportAsync(await AddClaimedJobAsync(), _filePath, CancellationToken.None);
     }
 
     [Fact]
@@ -140,7 +158,8 @@ public sealed class CustomerImportServiceTests : IDisposable
         Assert.Equal(result.Created, log.CreatedCount);
         Assert.Equal(result.Updated, log.UpdatedCount);
         Assert.Equal(result.Failed, log.FailedCount);
-        Assert.InRange(log.StartedAt, before, DateTime.UtcNow);
+        Assert.Equal(ImportJobStatus.Completed, log.Status);
+        Assert.InRange(log.StartedAt!.Value, before, DateTime.UtcNow);
         Assert.NotNull(log.CompletedAt);
         Assert.True(log.CompletedAt >= log.StartedAt);
     }
@@ -160,14 +179,19 @@ public sealed class CustomerImportServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ImportAsync_WhenFileIsMissing_ThrowsAndStoresNothing()
+    public async Task ImportAsync_WhenFileIsMissing_ThrowsAndLeavesJobUnfinished()
     {
+        var job = await AddClaimedJobAsync();
+
         var action = () => _service.ImportAsync(
+            job,
             Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()),
             CancellationToken.None);
 
         await Assert.ThrowsAsync<FileNotFoundException>(action);
-        Assert.Equal(0, await _dbContext.ImportLogs.CountAsync());
+        Assert.Equal(ImportJobStatus.Processing, job.Status);
+        Assert.Null(job.CompletedAt);
+        Assert.Equal(0, await _dbContext.Customers.CountAsync());
     }
 
     // ---------- Duplicate legacy IDs ----------
@@ -326,7 +350,9 @@ public sealed class CustomerImportServiceTests : IDisposable
 
         await File.WriteAllLinesAsync(_filePath, [BuildLine()]);
 
-        var action = () => service.ImportAsync(_filePath, CancellationToken.None);
+        var job = await AddClaimedJobAsync();
+
+        var action = () => service.ImportAsync(job, _filePath, CancellationToken.None);
 
         await Assert.ThrowsAsync<InvalidOperationException>(action);
         Assert.Equal(0, await _dbContext.ImportErrors.CountAsync());

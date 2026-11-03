@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Syspro.Api.BackgroundJobs;
 using Syspro.Api.Controllers;
 using Syspro.Api.DTOs;
 using Syspro.Api.Services;
@@ -76,7 +77,7 @@ public class ControllerCancellationTests
     }
 
     // Blocks until the token passed by the controller is cancelled.
-    private sealed class BlockingServices : IOrderService, ICustomerImportService
+    private sealed class BlockingServices : IOrderService, ICustomerImportJobService
     {
         public TaskCompletionSource Entered { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -104,11 +105,14 @@ public class ControllerCancellationTests
             return BlockAsync<List<CustomerOrderTotalResponse>>(cancellationToken);
         }
 
-        public Task<ImportResult> ImportAsync(
-            string filePath,
-            CancellationToken cancellationToken)
+        public Task<ImportJobResponse> ScheduleAsync(CancellationToken cancellationToken)
         {
-            return BlockAsync<ImportResult>(cancellationToken);
+            return BlockAsync<ImportJobResponse>(cancellationToken);
+        }
+
+        public Task<ImportJobResponse?> GetAsync(int id, CancellationToken cancellationToken)
+        {
+            return BlockAsync<ImportJobResponse?>(cancellationToken);
         }
 
         private async Task<T> BlockAsync<T>(CancellationToken cancellationToken)
@@ -141,10 +145,11 @@ public class ControllerCancellationTests
             builder.ConfigureServices(serviceCollection =>
             {
                 serviceCollection.RemoveAll<IOrderService>();
-                serviceCollection.RemoveAll<ICustomerImportService>();
+                serviceCollection.RemoveAll<ICustomerImportJobService>();
+                serviceCollection.Configure<CustomerImportWorkerOptions>(options => options.Enabled = false);
 
                 serviceCollection.AddSingleton<IOrderService>(services);
-                serviceCollection.AddSingleton<ICustomerImportService>(services);
+                serviceCollection.AddSingleton<ICustomerImportJobService>(services);
             });
         }
     }
@@ -156,6 +161,7 @@ public class ControllerCancellationTests
     [InlineData("GET", "/api/orders/1")]
     [InlineData("GET", "/api/customers/totals?fromDate=2026-01-01&toDate=2026-12-31")]
     [InlineData("POST", "/api/import/customers")]
+    [InlineData("GET", "/api/import/jobs/1")]
     public async Task Endpoint_WhenClientDisconnects_CancelsServiceCall(
         string method,
         string path)

@@ -20,15 +20,11 @@ public class CustomerImportService : ICustomerImportService
         _importRepository = importRepository;
     }
 
-    public async Task<ImportResult> ImportAsync(string filePath, CancellationToken cancellationToken)
+    public async Task<ImportResult> ImportAsync(
+        ImportLog importLog,
+        string filePath,
+        CancellationToken cancellationToken)
     {
-        var importLog = new ImportLog
-        {
-            StartedAt = DateTime.UtcNow
-        };
-
-        await _importRepository.AddLogAsync(importLog, cancellationToken);
-
         var lines = await File.ReadAllLinesAsync(filePath, cancellationToken);
 
         // Ignores case to match the unique index under SQL Server's default collation.
@@ -96,6 +92,7 @@ public class CustomerImportService : ICustomerImportService
             }
         }
 
+        importLog.Status = ImportJobStatus.Completed;
         importLog.CompletedAt = DateTime.UtcNow;
 
         await _customerRepository.SaveChangesAsync(cancellationToken);

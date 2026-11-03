@@ -103,7 +103,13 @@ namespace Syspro.Api.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("int");
+
                     b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
                     b.Property<int>("CreatedCount")
@@ -112,18 +118,36 @@ namespace Syspro.Api.Migrations
                     b.Property<int>("FailedCount")
                         .HasColumnType("int");
 
+                    b.Property<string>("FailureReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
                     b.Property<int>("ProcessedCount")
                         .HasColumnType("int");
 
-                    b.Property<DateTime>("StartedAt")
+                    b.Property<DateTime?>("StartedAt")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("Status")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(20)");
 
                     b.Property<int>("UpdatedCount")
                         .HasColumnType("int");
 
                     b.HasKey("Id");
 
-                    b.ToTable("ImportLogs");
+                    b.HasIndex("Status", "CreatedAt");
+
+                    b.ToTable("ImportLogs", t =>
+                        {
+                            t.HasCheckConstraint("CK_ImportLogs_Lifecycle", "([Status] = 'Pending' AND [StartedAt] IS NULL AND [CompletedAt] IS NULL AND [FailureReason] IS NULL)\nOR ([Status] = 'Processing' AND [StartedAt] IS NOT NULL AND [CompletedAt] IS NULL AND [FailureReason] IS NULL)\nOR ([Status] = 'Completed' AND [StartedAt] IS NOT NULL AND [CompletedAt] IS NOT NULL AND [FailureReason] IS NULL)\nOR ([Status] = 'Failed' AND [CompletedAt] IS NOT NULL AND [FailureReason] IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_ImportLogs_Status", "[Status] IN ('Pending', 'Processing', 'Completed', 'Failed')");
+                        });
                 });
 
             modelBuilder.Entity("Syspro.Api.Models.Order", b =>

@@ -7,36 +7,44 @@ namespace Syspro.Api.Controllers;
 [Route("api/import")]
 public class ImportController : ControllerBase
 {
-    private readonly ICustomerImportService _customerImportService;
+    private readonly ICustomerImportJobService _importJobService;
     private readonly IWebHostEnvironment _environment;
 
     public ImportController(
-        ICustomerImportService customerImportService,
+        ICustomerImportJobService importJobService,
         IWebHostEnvironment environment)
     {
-        _customerImportService = customerImportService;
+        _importJobService = importJobService;
         _environment = environment;
     }
 
     [HttpPost("customers")]
     public async Task<IActionResult> ImportCustomers(CancellationToken cancellationToken)
     {
-         var filePath = Path.Combine(
-            _environment.ContentRootPath,
-            "LegacyData",
-            "customers_legacy.dat");
-
-        if (!System.IO.File.Exists(filePath))
+        if (!System.IO.File.Exists(LegacyCustomerFile.GetPath(_environment)))
         {
             return Problem(
                 detail: "Legacy customer file was not found.",
                 statusCode: StatusCodes.Status404NotFound);
         }
 
-        var result = await _customerImportService.ImportAsync(
-            filePath,
-            cancellationToken);
+        var job = await _importJobService.ScheduleAsync(cancellationToken);
 
-        return Ok(result);
+        return AcceptedAtAction(nameof(GetImportJob), new { id = job.Id }, job);
+    }
+
+    [HttpGet("jobs/{id:int}")]
+    public async Task<IActionResult> GetImportJob(int id, CancellationToken cancellationToken)
+    {
+        var job = await _importJobService.GetAsync(id, cancellationToken);
+
+        if (job is null)
+        {
+            return Problem(
+                detail: $"Import job with id {id} was not found.",
+                statusCode: StatusCodes.Status404NotFound);
+        }
+
+        return Ok(job);
     }
 }

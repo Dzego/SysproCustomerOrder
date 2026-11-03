@@ -41,6 +41,10 @@ The project demonstrates:
 SysproCustomerOrder/
 │
 ├── Syspro.Api/
+│   ├── BackgroundJobs/
+│   │   ├── CustomerImportWorker.cs
+│   │   └── CustomerImportWorkerOptions.cs
+│   │
 │   ├── Controllers/
 │   │   ├── CustomersController.cs
 │   │   ├── ImportController.cs
@@ -71,7 +75,10 @@ SysproCustomerOrder/
 │   ├── Services/
 │   │   ├── BusinessRuleException.cs
 │   │   ├── ResourceNotFoundException.cs
+│   │   ├── CustomerImportJobRunner.cs
+│   │   ├── CustomerImportJobService.cs
 │   │   ├── CustomerImportService.cs
+│   │   ├── LegacyCustomerFile.cs
 │   │   ├── ICustomerImportService.cs
 │   │   ├── LegacyCustomerParser.cs
 │   │   ├── LegacyCustomerParseException.cs
@@ -319,18 +326,106 @@ Example:
 POST http://localhost:5204/api/import/customers
 ```
 
-## Example Successful Response
+Imports run in the background. The request saves a job and returns straight away, without waiting for the import.
+
+> **Breaking change:** this endpoint used to process the file during the request and return `200 OK` with the counts. It now returns `202 Accepted`, and clients read the counts from the job. A failed import no longer returns `500`; the job reports `Failed` instead.
+
+## Example Response
+
+```http
+HTTP/1.1 202 Accepted
+Location: /api/import/jobs/12
+```
 
 ```json
 {
-  "processed": 7,
-  "created": 2,
-  "updated": 3,
-  "failed": 2
+  "id": 12,
+  "status": "Pending",
+  "createdAt": "2026-11-04T08:15:00.1234567Z",
+  "startedAt": null,
+  "completedAt": null,
+  "processed": 0,
+  "created": 0,
+  "updated": 0,
+  "failed": 0,
+  "failureReason": null
 }
 ```
 
-The exact `created` and `updated` values depend on the current state of the database.
+If the legacy file does not exist, the endpoint returns `404 Not Found` and creates no job.
+
+## Check an Import Job
+
+```http
+GET /api/import/jobs/{id}
+```
+
+```json
+{
+  "id": 12,
+  "status": "Completed",
+  "createdAt": "2026-11-04T08:15:00.1234567Z",
+  "startedAt": "2026-11-04T08:15:03.2345678Z",
+  "completedAt": "2026-11-04T08:15:03.9876543Z",
+  "processed": 7,
+  "created": 2,
+  "updated": 3,
+  "failed": 2,
+  "failureReason": null
+}
+```
+
+The exact `created` and `updated` values depend on the current state of the database. The counts stay at zero until the job has completed. An unknown id returns `404 Not Found`.
+
+The `failed` count covers invalid rows, which are stored in `ImportErrors`. They do not make a job fail. A job is `Failed` only when the import as a whole could not finish, and `failureReason` then holds a safe description. Exception details go only to the application logs.
+
+## Job Lifecycle
+
+| Status | Meaning |
+| --- | --- |
+| `Pending` | Saved and waiting for the worker |
+| `Processing` | Claimed by the worker |
+| `Completed` | Finished, with results saved |
+| `Failed` | Finished without changing any customers |
+
+```text
+Pending -> Processing -> Completed or Failed
+Processing -> Pending, when interrupted work is queued to run again
+```
+
+The job is stored in `ImportLogs`, where the database enforces valid status and timestamp combinations. The file is read when the job runs, not when it is accepted.
+
+## Restarts and Interruptions
+
+The customers, row errors and `Completed` status are committed in one transaction, so a job that is not `Completed` has changed nothing. This is what makes running an interrupted job again safe.
+
+| Event | Result |
+| --- | --- |
+| Client disconnects before the job is saved | No job is created |
+| Client disconnects after `202 Accepted` | The job is unaffected |
+| API stops or restarts with jobs `Pending` | They run after the restart |
+| Graceful shutdown during an import | The job returns to `Pending` without using an attempt |
+| Crash during an import | The job is left `Processing`, and is requeued at the next startup |
+| Job interrupted by crashes `MaxAttempts` times | The job becomes `Failed`, which stops a job that crashes the process from looping forever |
+| Import fails while running, for example a database error | The job becomes `Failed` and is not retried automatically. Send a new request to try again |
+
+## Worker Configuration
+
+```json
+"CustomerImportWorker": {
+  "Enabled": true,
+  "PollInterval": "00:00:05",
+  "MaxAttempts": 3
+}
+```
+
+`PollInterval` must be above zero and at most five minutes. A new job can wait up to one interval before it starts.
+
+## Deployment Limitation: Single Worker Only
+
+**Run the worker on only one instance.** With more than one API instance, set `CustomerImportWorker:Enabled` to `false` on all but one. The disabled instances still accept jobs and report their status.
+
+Claiming a job is atomic, so two workers cannot both claim the same `Pending` job. Recovery is not safe with several workers, however. It assumes that any `Processing` job has been abandoned, so a worker starting up would requeue a job that another worker is still running. There are no leases or heartbeats to tell the two apart. This also applies during a rolling deployment where the old and new instances overlap.
 
 ---
 
@@ -439,11 +534,15 @@ Increment FailedCount
 Continue with next row
 ```
 
-Every import execution is represented by an `ImportLog`.
+Every import execution is represented by an `ImportLog`, which also acts as its background job.
 
 The log records:
 
 ```text
+Status
+AttemptCount
+FailureReason
+CreatedAt
 ProcessedCount
 CreatedCount
 UpdatedCount

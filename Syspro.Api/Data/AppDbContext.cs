@@ -112,6 +112,39 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
 
         importLog.HasKey(x => x.Id);
 
+        // A concurrency token, so that committing a job fails if its status was
+        // changed by anything else after it was claimed.
+        importLog.Property(x => x.Status)
+            .HasConversion<string>()
+            .HasMaxLength(20)
+            .IsUnicode(false)
+            .IsConcurrencyToken();
+
+        importLog.Property(x => x.CreatedAt)
+            .HasColumnType("datetime2");
+
+        importLog.Property(x => x.FailureReason)
+            .HasMaxLength(ImportLog.FailureReasonMaxLength);
+
+        // Supports the worker's search for the oldest pending job.
+        importLog.HasIndex(x => new { x.Status, x.CreatedAt });
+
+        importLog.ToTable(table =>
+        {
+            table.HasCheckConstraint(
+                "CK_ImportLogs_Status",
+                "[Status] IN ('Pending', 'Processing', 'Completed', 'Failed')");
+
+            table.HasCheckConstraint(
+                "CK_ImportLogs_Lifecycle",
+                """
+                ([Status] = 'Pending' AND [StartedAt] IS NULL AND [CompletedAt] IS NULL AND [FailureReason] IS NULL)
+                OR ([Status] = 'Processing' AND [StartedAt] IS NOT NULL AND [CompletedAt] IS NULL AND [FailureReason] IS NULL)
+                OR ([Status] = 'Completed' AND [StartedAt] IS NOT NULL AND [CompletedAt] IS NOT NULL AND [FailureReason] IS NULL)
+                OR ([Status] = 'Failed' AND [CompletedAt] IS NOT NULL AND [FailureReason] IS NOT NULL)
+                """);
+        });
+
         importLog.Property(x => x.StartedAt)
             .HasColumnType("datetime2");
 

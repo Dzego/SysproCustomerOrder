@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Syspro.Api.Data;
+using Syspro.Api.Models;
 
 namespace Syspro.IntegrationTests.Infrastructure;
 
@@ -17,7 +18,12 @@ public sealed class ConcurrentImportInterceptor(
         InterceptionResult<int> result,
         CancellationToken cancellationToken = default)
     {
-        if (!_hasInserted)
+        // Waits for the save that writes customers, not the one that schedules a job.
+        var isSavingCustomers = eventData.Context!.ChangeTracker
+            .Entries<Customer>()
+            .Any(entry => entry.State == EntityState.Added);
+
+        if (isSavingCustomers && !_hasInserted)
         {
             _hasInserted = true;
 

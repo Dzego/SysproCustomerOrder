@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Syspro.Api.Data;
 using Syspro.Api.DTOs;
+using Syspro.Api.Models;
 using Syspro.Api.Repositories;
 using Syspro.Api.Services;
 using Syspro.IntegrationTests.Infrastructure;
@@ -26,9 +27,22 @@ public sealed class CustomerImportTests : SqlServerTestBase, IDisposable
     {
         await File.WriteAllLinesAsync(_filePath, lines);
 
+        await AddPendingJobAsync();
+
         await using var dbContext = CreateDbContext();
 
-        return await CreateService(dbContext).ImportAsync(_filePath, CancellationToken.None);
+        var job = await ClaimJobAsync(dbContext);
+
+        return await CreateService(dbContext).ImportAsync(job, _filePath, CancellationToken.None);
+    }
+
+    private static async Task<ImportLog> ClaimJobAsync(AppDbContext dbContext)
+    {
+        var job = await new ImportRepository(dbContext).ClaimNextPendingJobAsync(CancellationToken.None);
+
+        Assert.NotNull(job);
+
+        return job;
     }
 
     // Both repositories share one context, matching the scoped registration in
@@ -75,6 +89,7 @@ public sealed class CustomerImportTests : SqlServerTestBase, IDisposable
 
         var log = await QueryAsync(context => context.ImportLogs.SingleAsync());
 
+        Assert.Equal(ImportJobStatus.Completed, log.Status);
         Assert.Equal(2, log.ProcessedCount);
         Assert.Equal(2, log.CreatedCount);
         Assert.Equal(0, log.UpdatedCount);
@@ -287,11 +302,15 @@ public sealed class CustomerImportTests : SqlServerTestBase, IDisposable
                 TestData.LegacyLine(legacyCustomerId: "0000000002", tier: "Z")
             ]);
 
+        await AddPendingJobAsync();
+
         await using var dbContext = CreateDbContext(
             new ConcurrentImportInterceptor(ConnectionString, "0000000001"));
 
+        var job = await ClaimJobAsync(dbContext);
+
         var exception = await Assert.ThrowsAsync<DbUpdateException>(
-            () => CreateService(dbContext).ImportAsync(_filePath, CancellationToken.None));
+            () => CreateService(dbContext).ImportAsync(job, _filePath, CancellationToken.None));
 
         Assert.Equal(SqlUniqueIndexViolation, TestData.SqlErrorNumber(exception));
 
@@ -300,8 +319,13 @@ public sealed class CustomerImportTests : SqlServerTestBase, IDisposable
 
         // Only the row committed by the concurrent import remains.
         Assert.Equal(new[] { "Concurrent Import", "Existing" }, names);
-        Assert.Equal(0, await QueryAsync(context => context.ImportLogs.CountAsync()));
         Assert.Equal(0, await QueryAsync(context => context.ImportErrors.CountAsync()));
+
+        // The job row was saved earlier, and none of this attempt's results were.
+        var stored = await QueryAsync(context => context.ImportLogs.SingleAsync());
+
+        Assert.Equal(ImportJobStatus.Processing, stored.Status);
+        Assert.Equal(0, stored.ProcessedCount);
     }
 
     [SqlServerFact]
@@ -311,13 +335,20 @@ public sealed class CustomerImportTests : SqlServerTestBase, IDisposable
 
         using var cancellationSource = new CancellationTokenSource();
 
+        await AddPendingJobAsync();
+
         await using var dbContext = CreateDbContext(new CancelOnSaveInterceptor(cancellationSource));
 
-        var action = () => CreateService(dbContext).ImportAsync(_filePath, cancellationSource.Token);
+        var job = await ClaimJobAsync(dbContext);
+
+        var action = () => CreateService(dbContext).ImportAsync(job, _filePath, cancellationSource.Token);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);
 
         Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
-        Assert.Equal(0, await QueryAsync(context => context.ImportLogs.CountAsync()));
+
+        var stored = await QueryAsync(context => context.ImportLogs.SingleAsync());
+
+        Assert.Equal(ImportJobStatus.Processing, stored.Status);
     }
 }

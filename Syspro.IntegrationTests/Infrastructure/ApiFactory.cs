@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Syspro.Api.BackgroundJobs;
 using Syspro.Api.Data;
 using Syspro.Api.Services;
 
@@ -18,7 +19,8 @@ public sealed class ApiFactory(
     string connectionString,
     string? contentRoot = null,
     IInterceptor[]? interceptors = null,
-    IOrderService? orderService = null) : WebApplicationFactory<Program>
+    IOrderService? orderService = null,
+    bool runImportWorker = false) : WebApplicationFactory<Program>
 {
     public CapturedLogs Logs { get; } = new();
 
@@ -38,6 +40,12 @@ public sealed class ApiFactory(
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<IStartupFilter>(Outcome);
+
+            services.Configure<CustomerImportWorkerOptions>(options =>
+            {
+                options.Enabled = runImportWorker;
+                options.PollInterval = TimeSpan.FromMilliseconds(50);
+            });
 
             services.RemoveAll<DbContextOptions<AppDbContext>>();
 

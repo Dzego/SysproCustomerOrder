@@ -12,6 +12,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Syspro.Api.BackgroundJobs;
 using Syspro.Api.Data;
 using Syspro.Api.DTOs;
 using Syspro.Api.ExceptionHandling;
@@ -159,6 +160,8 @@ public sealed class ExceptionHandlingTests
 
             builder.ConfigureServices(services =>
             {
+                services.Configure<CustomerImportWorkerOptions>(options => options.Enabled = false);
+
                 services.AddSingleton<IStartupFilter>(Outcome);
 
                 services.RemoveAll<DbContextOptions<AppDbContext>>();
