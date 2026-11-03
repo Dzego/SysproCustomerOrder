@@ -177,6 +177,26 @@ public class CreateOrderRequestValidatorTests
         result.ShouldHaveValidationErrorFor(x => x.LegacyCustomerId);
     }
 
+    // A usable identifier does not excuse an invalid one sent alongside it.
+    [Fact]
+    public void Validate_WithValidLegacyIdButInvalidCustomerId_HasCustomerIdError()
+    {
+        var result = _validator.TestValidate(
+            CreateValidRequest(customerId: 0, legacyCustomerId: "0000012345"));
+
+        result.ShouldHaveValidationErrorFor(x => x.CustomerId);
+    }
+
+    [Fact]
+    public void Validate_WithValidCustomerIdButOverLongLegacyId_HasLegacyCustomerIdError()
+    {
+        var result = _validator.TestValidate(CreateValidRequest(
+            customerId: 1,
+            legacyCustomerId: new string('1', CreateOrderRequestValidator.LegacyCustomerIdMaxLength + 1)));
+
+        result.ShouldHaveValidationErrorFor(x => x.LegacyCustomerId);
+    }
+
     // ---------- Currency ----------
 
     [Theory]
@@ -204,6 +224,17 @@ public class CreateOrderRequestValidatorTests
 
         result.ShouldHaveValidationErrorFor(x => x.Currency)
             .WithErrorMessage("Currency must be a 3-letter ISO 4217 code.");
+    }
+
+    // Letters outside A-Z would pass a check based on char.IsLetter.
+    [Theory]
+    [InlineData("ÄBC")]
+    [InlineData("日本語")]
+    public void Validate_WithNonAsciiCurrency_HasCurrencyFormatError(string currency)
+    {
+        var result = _validator.TestValidate(CreateValidRequest(currency: currency));
+
+        result.ShouldHaveValidationErrorFor(x => x.Currency);
     }
 
     [Theory]

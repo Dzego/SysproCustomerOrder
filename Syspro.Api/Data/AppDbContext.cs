@@ -126,7 +126,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
         importError.HasKey(x => x.Id);
 
         importError.Property(x => x.RawData)
-            .HasMaxLength(80)
+            .HasMaxLength(ImportError.RawDataMaxLength)
             .IsRequired();
 
         importError.Property(x => x.Reason)

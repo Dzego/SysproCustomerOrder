@@ -135,6 +135,9 @@ public class ControllerCancellationTests
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            // The default Development environment would load user secrets.
+            builder.UseEnvironment("Testing");
+
             builder.ConfigureServices(serviceCollection =>
             {
                 serviceCollection.RemoveAll<IOrderService>();

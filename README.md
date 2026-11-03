@@ -81,12 +81,8 @@ SysproCustomerOrder/
 │   └── Program.cs
 │
 ├── Syspro.Tests/
-│   ├── Services/
-│   │   ├── LegacyCustomerParserTests.cs
-│   │   └── OrderServiceTests.cs
-│   │
-│   └── Api/
-│       └── OrdersApiTests.cs
+│
+├── Syspro.IntegrationTests/
 │
 ├── docs/
 │   ├── application-architecture.png
@@ -96,7 +92,7 @@ SysproCustomerOrder/
 ├── docker-compose.yml
 ├── README.md
 ├── SOLUTION.md
-└── SysproCustomerOrder.slnx
+└── SysproCustomerOrder.sln
 ```
 
 > `OrdersApiTests.cs` represents the lightweight API integration test required by the assessment. If this test has not yet been added, remove it from the structure until it exists.
@@ -457,6 +453,10 @@ CompletedAt
 ```
 
 Individual failed rows are stored in `ImportErrors`.
+
+A `LegacyCustomerId` that appears more than once in a file is also a row-level failure: the first valid occurrence is processed, and later occurrences are recorded as errors and change nothing. Customers already in the database are still updated by that first occurrence.
+
+`RawData` holds at most 80 characters. A longer row is truncated when stored, and `Reason` records its original length.
 
 Each error records:
 
@@ -933,23 +933,46 @@ Expected response:
 
 The project uses xUnit for automated testing.
 
-Run all tests from the repository root:
+There are two test projects:
+
+| Project | Runs against | Needs Docker |
+| --- | --- | --- |
+| `Syspro.Tests` | Fakes, EF Core InMemory and the in-process API host | No |
+| `Syspro.IntegrationTests` | A real SQL Server container, using Testcontainers | Yes |
+
+Run these commands from the repository root:
 
 ```bash
+# Everything. Without Docker, integration tests are reported as skipped.
 dotnet test
+
+# Unit tests only
+dotnet test --filter "Category!=Integration"
+
+# SQL Server integration tests only
+dotnet test --filter "Category=Integration"
+
+# Where integration tests must run, such as CI. A missing Docker daemon fails.
+SYSPRO_REQUIRE_DOCKER=true dotnet test
 ```
 
-The test suite is organised by responsibility:
+## SQL Server Integration Tests
 
-```text
-Syspro.Tests/
-├── Services/
-│   ├── LegacyCustomerParserTests.cs
-│   └── OrderServiceTests.cs
-│
-└── Api/
-    └── OrdersApiTests.cs
+These tests cover behaviour that EF Core InMemory cannot reproduce: migrations, unique indexes, foreign keys, delete rules, column lengths, decimal precision, string comparison rules, transaction rollback and SQL translation of queries.
+
+Requirements:
+
+- A running Docker daemon with at least 2 GB of memory available to containers.
+- About 5 GB of free disk space for the first run, mostly for the SQL Server image.
+- On Apple Silicon, the image is amd64 only and runs under emulation. Pull it once with the platform set:
+
+```bash
+docker pull --platform linux/amd64 mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04
 ```
+
+One container is shared by the whole run, and each test gets its own freshly migrated database, which is dropped afterwards. Connection strings come only from that container, and the API runs in a `Testing` environment that does not load user secrets, so these tests cannot reach another database.
+
+A test is skipped only when no Docker daemon is reachable. If Docker is running, any failure, including a container that will not start, fails the test.
 
 ---
 

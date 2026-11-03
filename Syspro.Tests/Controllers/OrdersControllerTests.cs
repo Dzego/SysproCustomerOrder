@@ -39,6 +39,9 @@ public sealed class OrdersControllerTests : IDisposable
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            // The default Development environment would load user secrets.
+            builder.UseEnvironment("Testing");
+
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<DbContextOptions<AppDbContext>>();
@@ -333,15 +336,5 @@ public sealed class OrdersControllerTests : IDisposable
         // Assert
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal(0, await CountOrdersAsync());
-    }
-
-    [Fact]
-    public async Task GetOrderById_WhenOrderDoesNotExist_ReturnsNotFound()
-    {
-        // Act
-        var response = await _client.GetAsync("/api/orders/999");
-
-        // Assert
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 }

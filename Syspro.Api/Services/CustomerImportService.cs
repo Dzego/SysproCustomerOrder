@@ -31,6 +31,9 @@ public class CustomerImportService : ICustomerImportService
 
         var lines = await File.ReadAllLinesAsync(filePath, cancellationToken);
 
+        // Ignores case to match the unique index under SQL Server's default collation.
+        var firstLineByLegacyId = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
         for (var index = 0; index < lines.Length; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -43,6 +46,19 @@ public class CustomerImportService : ICustomerImportService
             try
             {
                 var record = _parser.Parse(line);
+
+                // Added only after parsing, so the first valid row is the one kept.
+                if (!firstLineByLegacyId.TryAdd(record.LegacyCustomerId, lineNumber))
+                {
+                    RecordFailure(
+                        importLog,
+                        lineNumber,
+                        line,
+                        $"Duplicate LegacyCustomerId {record.LegacyCustomerId}. " +
+                        $"First seen on line {firstLineByLegacyId[record.LegacyCustomerId]}.");
+
+                    continue;
+                }
 
                 var existingCustomer =
                     await _customerRepository.GetByLegacyCustomerIdAsync(
@@ -76,16 +92,8 @@ public class CustomerImportService : ICustomerImportService
             }
             catch (LegacyCustomerParseException exception)
             {
-                importLog.FailedCount++;
-
-                importLog.Errors.Add(new ImportError
-                {
-                    LineNumber = lineNumber,
-                    RawData = line,
-                    Reason = exception.Message
-                });
+                RecordFailure(importLog, lineNumber, line, exception.Message);
             }
-            
         }
 
         importLog.CompletedAt = DateTime.UtcNow;
@@ -100,5 +108,27 @@ public class CustomerImportService : ICustomerImportService
             Updated = importLog.UpdatedCount,
             Failed = importLog.FailedCount
         };
+    }
+
+    private static void RecordFailure(
+        ImportLog importLog,
+        int lineNumber,
+        string line,
+        string reason)
+    {
+        const int maxLength = ImportError.RawDataMaxLength;
+
+        var isTooLong = line.Length > maxLength;
+
+        importLog.FailedCount++;
+
+        importLog.Errors.Add(new ImportError
+        {
+            LineNumber = lineNumber,
+            RawData = isTooLong ? line[..maxLength] : line,
+            Reason = isTooLong
+                ? $"{reason} RawData was truncated from {line.Length} to {maxLength} characters."
+                : reason
+        });
     }
 }

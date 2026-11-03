@@ -9,9 +9,12 @@ namespace Syspro.Api.ExceptionHandling;
 // framework and libraries also throw them for server-side faults, which must
 // surface as 500 rather than be blamed on the client.
 //
-// Client disconnects never reach this class. ExceptionHandlerMiddleware handles
-// an OperationCanceledException itself when RequestAborted is signalled, so one
-// that does arrive here is a server-side timeout and is correctly a 500.
+// ExceptionHandlerMiddleware handles a top-level OperationCanceledException itself
+// when RequestAborted is signalled, but SqlClient can report the same disconnect
+// as a SqlException, and EF Core can wrap either one, so those arrive here. A
+// disconnect needs both the signal and a cancellation exception: any other
+// exception is a genuine failure, even if the client also left, and a cancellation
+// without the signal is a server-side timeout. Both are logged as errors.
 public sealed class GlobalExceptionHandler : IExceptionHandler
 {
     private const string UnexpectedErrorDetail =
@@ -36,6 +39,18 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
         Exception exception,
         CancellationToken cancellationToken)
     {
+        if (httpContext.RequestAborted.IsCancellationRequested &&
+            CancellationExceptionClassifier.IsCancellation(exception))
+        {
+            LogClientDisconnect(httpContext, exception);
+
+            // Matches what the middleware records for a disconnect. No client is
+            // left to receive this status or a response body.
+            httpContext.Response.StatusCode = StatusCodes.Status499ClientClosedRequest;
+
+            return true;
+        }
+
         var problem = CreateProblem(exception);
 
         LogException(httpContext, exception, problem.Status!.Value);
@@ -84,6 +99,16 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
                     : UnexpectedErrorDetail
             }
         };
+    }
+
+    private void LogClientDisconnect(HttpContext httpContext, Exception exception)
+    {
+        _logger.LogInformation(
+            "Request {Method} {Path} was cancelled because the client disconnected ({ExceptionType}). TraceId: {TraceId}",
+            httpContext.Request.Method,
+            httpContext.Request.Path,
+            exception.GetType().Name,
+            ProblemDetailsCustomization.GetTraceId(httpContext));
     }
 
     private void LogException(HttpContext httpContext, Exception exception, int statusCode)

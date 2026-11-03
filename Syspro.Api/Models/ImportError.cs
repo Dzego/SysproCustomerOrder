@@ -2,6 +2,8 @@ namespace Syspro.Api.Models;
 
 public class ImportError
 {
+    public const int RawDataMaxLength = 80;
+
     public int Id { get; set; }
 
     public int ImportLogId { get; set; }

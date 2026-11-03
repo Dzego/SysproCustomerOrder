@@ -567,6 +567,111 @@ public sealed class ExceptionHandlingTests
         Assert.DoesNotContain(factory.Logs.Entries, e => e.Level >= LogLevel.Error);
     }
 
+    private static async Task<(ApiFactory Factory, int StatusCode)> DisconnectThenThrowAsync(
+        Exception exception)
+    {
+        var entered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var orderService = new ThrowingOrderService(async cancellationToken =>
+        {
+            entered.TrySetResult();
+
+            try
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw exception;
+            }
+        });
+
+        var factory = new ApiFactory("Production", orderService);
+
+        using var client = factory.CreateClient();
+        using var cancellationSource = new CancellationTokenSource();
+
+        var sendTask = client.GetAsync(FailingEndpoint, cancellationSource.Token);
+
+        await entered.Task.WaitAsync(TestTimeout);
+
+        cancellationSource.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sendTask);
+
+        var statusCode = await factory.Outcome.StatusCode.Task.WaitAsync(TestTimeout);
+
+        return (factory, statusCode);
+    }
+
+    // EF Core wraps failures during a save, so the middleware does not recognize
+    // this as a cancellation and it reaches the handler.
+    [Fact]
+    public async Task ClientDisconnect_WithWrappedCancellation_IsNotLoggedAsAnError()
+    {
+        var (factory, statusCode) = await DisconnectThenThrowAsync(
+            new DbUpdateException("Save failed.", new OperationCanceledException()));
+
+        using (factory)
+        {
+            Assert.Equal(StatusCodes.Status499ClientClosedRequest, statusCode);
+            Assert.DoesNotContain(factory.Logs.Entries, e => e.Level >= LogLevel.Error);
+            Assert.Contains(
+                factory.Logs.Entries,
+                e => e.Category == typeof(GlobalExceptionHandler).FullName && e.Level == LogLevel.Information);
+        }
+    }
+
+    // A real fault must stay visible even though the client has also gone.
+    [Fact]
+    public async Task ClientDisconnect_WithUnrelatedFailure_IsStillLoggedAsAnError()
+    {
+        var failure = new InvalidOperationException(SensitiveText);
+
+        var (factory, statusCode) = await DisconnectThenThrowAsync(failure);
+
+        using (factory)
+        {
+            Assert.Equal(StatusCodes.Status500InternalServerError, statusCode);
+
+            var entry = Assert.Single(factory.Logs.Entries, e => e.Level >= LogLevel.Error);
+
+            Assert.Equal(typeof(GlobalExceptionHandler).FullName, entry.Category);
+            Assert.Same(failure, entry.Exception);
+        }
+    }
+
+    [Fact]
+    public async Task WrappedCancellation_WithoutClientDisconnect_ReturnsServerError()
+    {
+        using var factory = CreateFactoryThrowing(
+            new DbUpdateException("Save failed.", new OperationCanceledException()));
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(FailingEndpoint);
+
+        await ReadProblemAsync(response, HttpStatusCode.InternalServerError);
+        Assert.Single(factory.Logs.Entries, e => e.Level >= LogLevel.Error);
+    }
+
+    public static TheoryData<Exception, bool> ExceptionsToClassify => new()
+    {
+        { new OperationCanceledException(), true },
+        { new TaskCanceledException(), true },
+        { new DbUpdateException("Save failed.", new TaskCanceledException()), true },
+        { new InvalidOperationException(), false },
+        { new DbUpdateException("Save failed.", new InvalidOperationException()), false },
+        { new TimeoutException(), false }
+    };
+
+    [Theory]
+    [MemberData(nameof(ExceptionsToClassify))]
+    public void IsCancellation_RecognizesOnlyCancellationExceptions(Exception exception, bool expected)
+    {
+        Assert.Equal(expected, CancellationExceptionClassifier.IsCancellation(exception));
+    }
+
     // Nothing disconnected, so this is a server-side timeout that must be visible.
     [Fact]
     public async Task OperationCanceled_WithoutClientDisconnect_ReturnsServerError()

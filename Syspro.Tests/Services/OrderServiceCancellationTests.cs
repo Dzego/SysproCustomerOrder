@@ -108,18 +108,23 @@ public class OrderServiceCancellationTests
         Assert.Equal(cancellationSource.Token, _interceptor.CapturedToken);
     }
 
+    // Cancels when saving starts, so the customer lookup has already succeeded. A
+    // token that is cancelled up front would only ever exercise the lookup.
     [Fact]
-    public async Task CreateAsync_WhenCancelled_DoesNotPersistOrder()
+    public async Task CreateAsync_WhenCancelledAtSave_DoesNotPersistOrder()
     {
         // Arrange
         await using var dbContext = CreateDbContext();
         var customer = await AddCustomerAsync(dbContext);
         var service = new OrderService(dbContext);
 
+        using var cancellationSource = new CancellationTokenSource();
+        _interceptor.OnSaving = cancellationSource.Cancel;
+
         // Act
         var action = () => service.CreateAsync(
             CreateRequest(customerId: customer.Id),
-            CreateCancelledToken());
+            cancellationSource.Token);
 
         // Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);
