@@ -1,6 +1,7 @@
 using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Syspro.Api.Data;
+using Syspro.Api.ExceptionHandling;
 using Syspro.Api.Repositories;
 using Syspro.Api.Services;
 using Syspro.Api.Validators;
@@ -19,9 +20,15 @@ builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IImportRepository, ImportRepository>();
 builder.Services.AddScoped<LegacyCustomerParser>();
 builder.Services.AddValidatorsFromAssemblyContaining<CreateOrderRequestValidator>();
-
+builder.Services.AddProblemDetails(options =>
+    options.CustomizeProblemDetails = ProblemDetailsCustomization.Apply);
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
 var app = builder.Build();
+
+// First in the pipeline so that it catches failures from everything after it.
+app.UseExceptionHandler();
+app.UseStatusCodePages();
 
 app.UseHttpsRedirection();
 

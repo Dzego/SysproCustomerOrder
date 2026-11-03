@@ -20,19 +20,9 @@ public sealed class CustomersController : ControllerBase
         [FromQuery] DateTime toDate,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            var result = await _orderService
-                .GetCustomerTotalsAsync(fromDate, toDate, cancellationToken);
+        var result = await _orderService
+            .GetCustomerTotalsAsync(fromDate, toDate, cancellationToken);
 
-            return Ok(result);
-        }
-        catch (ArgumentException ex)
-        {
-            return BadRequest(new
-            {
-                message = ex.Message
-            });
-        }
+        return Ok(result);
     }
 }

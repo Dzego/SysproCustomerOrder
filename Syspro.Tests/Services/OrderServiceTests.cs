@@ -130,7 +130,7 @@ public class OrderServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_WhenCustomerDoesNotExist_ThrowsKeyNotFoundException()
+    public async Task CreateAsync_WhenCustomerDoesNotExist_ThrowsResourceNotFoundException()
     {
         // Arrange
         await using var dbContext = CreateDbContext();
@@ -157,11 +157,11 @@ public class OrderServiceTests
         var action = () => service.CreateAsync(request, CancellationToken.None);
 
         // Assert
-        await Assert.ThrowsAsync<KeyNotFoundException>(action);
+        await Assert.ThrowsAsync<ResourceNotFoundException>(action);
     }
 
     [Fact]
-    public async Task CreateAsync_WhenItemsAreEmpty_ThrowsArgumentException()
+    public async Task CreateAsync_WhenItemsAreEmpty_ThrowsBusinessRuleException()
     {
         // Arrange
         await using var dbContext = CreateDbContext();
@@ -181,13 +181,13 @@ public class OrderServiceTests
         var action = () => service.CreateAsync(request, CancellationToken.None);
 
         // Assert
-        await Assert.ThrowsAsync<ArgumentException>(action);
+        await Assert.ThrowsAsync<BusinessRuleException>(action);
     }
 
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    public async Task CreateAsync_WhenQuantityIsNotPositive_ThrowsArgumentException(
+    public async Task CreateAsync_WhenQuantityIsNotPositive_ThrowsBusinessRuleException(
         int quantity)
     {
         // Arrange
@@ -217,6 +217,6 @@ public class OrderServiceTests
         var action = () => service.CreateAsync(request, CancellationToken.None);
 
         // Assert
-        await Assert.ThrowsAsync<ArgumentException>(action);
+        await Assert.ThrowsAsync<BusinessRuleException>(action);
     }
 }

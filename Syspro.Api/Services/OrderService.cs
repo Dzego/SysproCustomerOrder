@@ -20,13 +20,13 @@ public sealed class OrderService : IOrderService
     {
         if (request.Items is null || request.Items.Count == 0)
         {
-            throw new ArgumentException("An order must contain at least one item.");
+            throw new BusinessRuleException("An order must contain at least one item.");
         }
 
         if (string.IsNullOrWhiteSpace(request.Currency) ||
             request.Currency.Length != 3)
         {
-            throw new ArgumentException("Currency must be a 3-character code.");
+            throw new BusinessRuleException("Currency must be a 3-character code.");
         }
 
         Customer? customer;
@@ -47,32 +47,32 @@ public sealed class OrderService : IOrderService
         }
         else
         {
-            throw new ArgumentException(
+            throw new BusinessRuleException(
                 "CustomerId or LegacyCustomerId must be provided.");
         }
 
         if (customer is null)
         {
-            throw new KeyNotFoundException("Customer was not found.");
+            throw new ResourceNotFoundException("Customer was not found.");
         }
 
         foreach (var item in request.Items)
         {
             if (item.Quantity <= 0)
             {
-                throw new ArgumentException(
+                throw new BusinessRuleException(
                     "Item quantity must be greater than zero.");
             }
 
             if (item.UnitPrice < 0)
             {
-                throw new ArgumentException(
+                throw new BusinessRuleException(
                     "Item unit price cannot be negative.");
             }
 
             if (string.IsNullOrWhiteSpace(item.Sku))
             {
-                throw new ArgumentException("Item SKU is required.");
+                throw new BusinessRuleException("Item SKU is required.");
             }
         }
 
@@ -142,7 +142,7 @@ public sealed class OrderService : IOrderService
     {
         if (fromDate > toDate)
         {
-            throw new ArgumentException(
+            throw new BusinessRuleException(
                 "fromDate cannot be later than toDate.");
         }
 

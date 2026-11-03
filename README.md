@@ -54,6 +54,10 @@ SysproCustomerOrder/
 │   ├── LegacyData/
 │   │   └── customers_legacy.dat
 │   │
+│   ├── ExceptionHandling/
+│   │   ├── GlobalExceptionHandler.cs
+│   │   └── ProblemDetailsCustomization.cs
+│   │
 │   ├── Migrations/
 │   │
 │   ├── Models/
@@ -65,6 +69,8 @@ SysproCustomerOrder/
 │   │   └── ImportRepository.cs
 │   │
 │   ├── Services/
+│   │   ├── BusinessRuleException.cs
+│   │   ├── ResourceNotFoundException.cs
 │   │   ├── CustomerImportService.cs
 │   │   ├── ICustomerImportService.cs
 │   │   ├── LegacyCustomerParser.cs
@@ -749,6 +755,34 @@ Validation includes:
 - SKU is required.
 - Currency must contain three characters.
 - `fromDate` cannot be later than `toDate`.
+
+---
+
+## Error Response Format
+
+All error responses use RFC 7807 ProblemDetails with the content type `application/problem+json`:
+
+```json
+{
+  "type": "https://tools.ietf.org/html/rfc9110#section-15.5.5",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "Customer was not found.",
+  "instance": "/api/orders",
+  "traceId": "00-f40e0c4c30a61a4097eb42240769929d-6cd4541bdfebfff0-00"
+}
+```
+
+Validation failures also contain an `errors` object with the messages for each field.
+
+| Condition | Status |
+| --- | --- |
+| Validation failure, malformed request or `BusinessRuleException` | 400 |
+| Missing resource or `ResourceNotFoundException` | 404 |
+| Request rejected by the server, such as an oversized body | The status carried by `BadHttpRequestException`, such as 413 |
+| Any other exception | 500 |
+
+Outside the `Development` environment, a 500 response contains only a generic message and the `traceId`. Use the `traceId` to find the full exception in the application logs.
 
 ---
 

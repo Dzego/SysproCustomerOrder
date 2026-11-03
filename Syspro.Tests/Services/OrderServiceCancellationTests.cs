@@ -68,7 +68,7 @@ public class OrderServiceCancellationTests
     }
 
     // The customer does not exist, so a lookup that ignored the token would
-    // complete and throw KeyNotFoundException instead of cancelling.
+    // complete and throw ResourceNotFoundException instead of cancelling.
     [Theory]
     [InlineData(999, null)]
     [InlineData(null, "9999999999")]

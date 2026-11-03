@@ -37,29 +37,12 @@ public sealed class OrdersController : ControllerBase
             return ValidationProblem(ModelState);
         }
 
-        try
-        {
-            var result = await _orderService.CreateAsync(request, cancellationToken);
+        var result = await _orderService.CreateAsync(request, cancellationToken);
 
-            return CreatedAtAction(
-                nameof(GetOrderById),
-                new { id = result.Id },
-                result);
-        }
-        catch (ArgumentException ex)
-        {
-            return BadRequest(new
-            {
-                message = ex.Message
-            });
-        }
-        catch (KeyNotFoundException ex)
-        {
-            return NotFound(new
-            {
-                message = ex.Message
-            });
-        }
+        return CreatedAtAction(
+            nameof(GetOrderById),
+            new { id = result.Id },
+            result);
     }
 
     [HttpGet("{id:int}")]
@@ -71,10 +54,9 @@ public sealed class OrdersController : ControllerBase
 
         if (result is null)
         {
-            return NotFound(new
-            {
-                message = $"Order with id {id} was not found."
-            });
+            return Problem(
+                detail: $"Order with id {id} was not found.",
+                statusCode: StatusCodes.Status404NotFound);
         }
 
         return Ok(result);

@@ -28,10 +28,9 @@ public class ImportController : ControllerBase
 
         if (!System.IO.File.Exists(filePath))
         {
-            return NotFound(new
-            {
-                message = "Legacy customer file was not found."
-            });
+            return Problem(
+                detail: "Legacy customer file was not found.",
+                statusCode: StatusCodes.Status404NotFound);
         }
 
         var result = await _customerImportService.ImportAsync(
