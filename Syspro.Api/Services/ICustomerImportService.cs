@@ -4,5 +4,5 @@ namespace Syspro.Api.Services;
 
 public interface ICustomerImportService
 {
-    Task<ImportResult> ImportAsync(string filePath);
+    Task<ImportResult> ImportAsync(string filePath, CancellationToken cancellationToken);
 }

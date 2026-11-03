@@ -12,13 +12,13 @@ public class ImportRepository : IImportRepository
         _dbContext = dbContext;
     }
 
-    public async Task AddLogAsync(ImportLog importLog)
+    public async Task AddLogAsync(ImportLog importLog, CancellationToken cancellationToken)
     {
-        await _dbContext.ImportLogs.AddAsync(importLog);
+        await _dbContext.ImportLogs.AddAsync(importLog, cancellationToken);
     }
 
-    public Task SaveChangesAsync()
+    public Task SaveChangesAsync(CancellationToken cancellationToken)
     {
-        return _dbContext.SaveChangesAsync();
+        return _dbContext.SaveChangesAsync(cancellationToken);
     }
 }

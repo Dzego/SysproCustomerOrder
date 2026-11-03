@@ -13,20 +13,23 @@ public class CustomerRepository : ICustomerRepository
         _dbContext = dbContext;
     }
 
-    public Task<Customer?> GetByLegacyCustomerIdAsync(string legacyCustomerId)
+    public Task<Customer?> GetByLegacyCustomerIdAsync(
+        string legacyCustomerId,
+        CancellationToken cancellationToken)
     {
         return _dbContext.Customers
             .FirstOrDefaultAsync(
-                customer => customer.LegacyCustomerId == legacyCustomerId);
+                customer => customer.LegacyCustomerId == legacyCustomerId,
+                cancellationToken);
     }
 
-    public async Task AddAsync(Customer customer)
+    public async Task AddAsync(Customer customer, CancellationToken cancellationToken)
     {
-        await _dbContext.Customers.AddAsync(customer);
+        await _dbContext.Customers.AddAsync(customer, cancellationToken);
     }
 
-    public Task SaveChangesAsync()
+    public Task SaveChangesAsync(CancellationToken cancellationToken)
     {
-        return _dbContext.SaveChangesAsync();
+        return _dbContext.SaveChangesAsync(cancellationToken);
     }
 }

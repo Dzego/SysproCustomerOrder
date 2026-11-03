@@ -75,7 +75,7 @@ public class OrderServiceTests
         };
 
         // Act
-        var result = await service.CreateAsync(request);
+        var result = await service.CreateAsync(request, CancellationToken.None);
 
         // Assert
         Assert.Equal(1250m, result.Total);
@@ -121,7 +121,7 @@ public class OrderServiceTests
         };
 
         // Act
-        var result = await service.CreateAsync(request);
+        var result = await service.CreateAsync(request, CancellationToken.None);
 
         // Assert
         Assert.Equal(customer.Id, result.CustomerId);
@@ -154,7 +154,7 @@ public class OrderServiceTests
         };
 
         // Act
-        var action = () => service.CreateAsync(request);
+        var action = () => service.CreateAsync(request, CancellationToken.None);
 
         // Assert
         await Assert.ThrowsAsync<KeyNotFoundException>(action);
@@ -178,7 +178,7 @@ public class OrderServiceTests
         };
 
         // Act
-        var action = () => service.CreateAsync(request);
+        var action = () => service.CreateAsync(request, CancellationToken.None);
 
         // Assert
         await Assert.ThrowsAsync<ArgumentException>(action);
@@ -214,7 +214,7 @@ public class OrderServiceTests
         };
 
         // Act
-        var action = () => service.CreateAsync(request);
+        var action = () => service.CreateAsync(request, CancellationToken.None);
 
         // Assert
         await Assert.ThrowsAsync<ArgumentException>(action);

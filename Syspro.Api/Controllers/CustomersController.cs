@@ -17,12 +17,13 @@ public sealed class CustomersController : ControllerBase
     [HttpGet("totals")]
     public async Task<IActionResult> GetCustomerTotals(
         [FromQuery] DateTime fromDate,
-        [FromQuery] DateTime toDate)
+        [FromQuery] DateTime toDate,
+        CancellationToken cancellationToken)
     {
         try
         {
             var result = await _orderService
-                .GetCustomerTotalsAsync(fromDate, toDate);
+                .GetCustomerTotalsAsync(fromDate, toDate, cancellationToken);
 
             return Ok(result);
         }

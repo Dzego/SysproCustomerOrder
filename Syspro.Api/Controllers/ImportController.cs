@@ -19,7 +19,7 @@ public class ImportController : ControllerBase
     }
 
     [HttpPost("customers")]
-    public async Task<IActionResult> ImportCustomers()
+    public async Task<IActionResult> ImportCustomers(CancellationToken cancellationToken)
     {
          var filePath = Path.Combine(
             _environment.ContentRootPath,
@@ -34,7 +34,9 @@ public class ImportController : ControllerBase
             });
         }
 
-        var result = await _customerImportService.ImportAsync(filePath);
+        var result = await _customerImportService.ImportAsync(
+            filePath,
+            cancellationToken);
 
         return Ok(result);
     }

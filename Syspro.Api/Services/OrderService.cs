@@ -14,7 +14,9 @@ public sealed class OrderService : IOrderService
         _dbContext = dbContext;
     }
 
-    public async Task<OrderResponse> CreateAsync(CreateOrderRequest request)
+    public async Task<OrderResponse> CreateAsync(
+        CreateOrderRequest request,
+        CancellationToken cancellationToken)
     {
         if (request.Items is null || request.Items.Count == 0)
         {
@@ -32,13 +34,16 @@ public sealed class OrderService : IOrderService
         if (request.CustomerId.HasValue)
         {
             customer = await _dbContext.Customers
-                .FirstOrDefaultAsync(x => x.Id == request.CustomerId.Value);
+                .FirstOrDefaultAsync(
+                    x => x.Id == request.CustomerId.Value,
+                    cancellationToken);
         }
         else if (!string.IsNullOrWhiteSpace(request.LegacyCustomerId))
         {
             customer = await _dbContext.Customers
                 .FirstOrDefaultAsync(
-                    x => x.LegacyCustomerId == request.LegacyCustomerId);
+                    x => x.LegacyCustomerId == request.LegacyCustomerId,
+                    cancellationToken);
         }
         else
         {
@@ -88,16 +93,16 @@ public sealed class OrderService : IOrderService
 
         _dbContext.Orders.Add(order);
 
-        await _dbContext.SaveChangesAsync();
+        await _dbContext.SaveChangesAsync(cancellationToken);
 
         return MapToResponse(order);
     }
 
-    public async Task<OrderResponse?> GetByIdAsync(int id)
+    public async Task<OrderResponse?> GetByIdAsync(int id, CancellationToken cancellationToken)
     {
         var order = await _dbContext.Orders
             .Include(x => x.Items)
-            .FirstOrDefaultAsync(x => x.Id == id);
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
         return order is null
             ? null
@@ -132,7 +137,8 @@ public sealed class OrderService : IOrderService
 
     public async Task<List<CustomerOrderTotalResponse>> GetCustomerTotalsAsync(
     DateTime fromDate,
-    DateTime toDate)
+    DateTime toDate,
+    CancellationToken cancellationToken)
     {
         if (fromDate > toDate)
         {
@@ -156,6 +162,6 @@ public sealed class OrderService : IOrderService
                         (item.UnitPrice * item.Quantity)) ?? 0
             })
             .OrderByDescending(x => x.Total)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 }

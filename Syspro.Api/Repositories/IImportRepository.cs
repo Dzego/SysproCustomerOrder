@@ -4,6 +4,6 @@ namespace Syspro.Api.Repositories;
 
 public interface IImportRepository
 {
-    Task AddLogAsync(ImportLog importLog);
-    Task SaveChangesAsync();
+    Task AddLogAsync(ImportLog importLog, CancellationToken cancellationToken);
+    Task SaveChangesAsync(CancellationToken cancellationToken);
 }

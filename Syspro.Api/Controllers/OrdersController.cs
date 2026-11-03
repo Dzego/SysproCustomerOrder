@@ -22,9 +22,13 @@ public sealed class OrdersController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<IActionResult> CreateOrder(CreateOrderRequest request)
+    public async Task<IActionResult> CreateOrder(
+        CreateOrderRequest request,
+        CancellationToken cancellationToken)
     {
-        var validationResult = await _createOrderValidator.ValidateAsync(request);
+        var validationResult = await _createOrderValidator.ValidateAsync(
+            request,
+            cancellationToken);
 
         if (!validationResult.IsValid)
         {
@@ -35,7 +39,7 @@ public sealed class OrdersController : ControllerBase
 
         try
         {
-            var result = await _orderService.CreateAsync(request);
+            var result = await _orderService.CreateAsync(request, cancellationToken);
 
             return CreatedAtAction(
                 nameof(GetOrderById),
@@ -59,9 +63,11 @@ public sealed class OrdersController : ControllerBase
     }
 
     [HttpGet("{id:int}")]
-    public async Task<IActionResult> GetOrderById(int id)
+    public async Task<IActionResult> GetOrderById(
+        int id,
+        CancellationToken cancellationToken)
     {
-        var result = await _orderService.GetByIdAsync(id);
+        var result = await _orderService.GetByIdAsync(id, cancellationToken);
 
         if (result is null)
         {

@@ -20,19 +20,21 @@ public class CustomerImportService : ICustomerImportService
         _importRepository = importRepository;
     }
 
-    public async Task<ImportResult> ImportAsync(string filePath)
+    public async Task<ImportResult> ImportAsync(string filePath, CancellationToken cancellationToken)
     {
         var importLog = new ImportLog
         {
             StartedAt = DateTime.UtcNow
         };
 
-        await _importRepository.AddLogAsync(importLog);
+        await _importRepository.AddLogAsync(importLog, cancellationToken);
 
-        var lines = await File.ReadAllLinesAsync(filePath);
+        var lines = await File.ReadAllLinesAsync(filePath, cancellationToken);
 
         for (var index = 0; index < lines.Length; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var line = lines[index];
             var lineNumber = index + 1;
 
@@ -44,7 +46,8 @@ public class CustomerImportService : ICustomerImportService
 
                 var existingCustomer =
                     await _customerRepository.GetByLegacyCustomerIdAsync(
-                        record.LegacyCustomerId);
+                        record.LegacyCustomerId,
+                        cancellationToken);
 
                 if (existingCustomer is null)
                 {
@@ -57,7 +60,7 @@ public class CustomerImportService : ICustomerImportService
                         Tier = record.Tier
                     };
 
-                    await _customerRepository.AddAsync(customer);
+                    await _customerRepository.AddAsync(customer, cancellationToken);
 
                     importLog.CreatedCount++;
                 }
@@ -87,8 +90,8 @@ public class CustomerImportService : ICustomerImportService
 
         importLog.CompletedAt = DateTime.UtcNow;
 
-        await _customerRepository.SaveChangesAsync();
-        await _importRepository.SaveChangesAsync();
+        await _customerRepository.SaveChangesAsync(cancellationToken);
+        await _importRepository.SaveChangesAsync(cancellationToken);
         
         return new ImportResult
         {
