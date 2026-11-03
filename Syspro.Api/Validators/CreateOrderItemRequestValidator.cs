@@ -6,13 +6,16 @@ namespace Syspro.Api.Validators;
 public sealed class CreateOrderItemRequestValidator : AbstractValidator<CreateOrderItemRequest>
 {
     // Lengths and precision mirror the column constraints configured in AppDbContext.
-    private const int SkuMaxLength = 50;
-    private const int DescriptionMaxLength = 200;
-    private const int UnitPricePrecision = 18;
-    private const int UnitPriceScale = 2;
+    public const int SkuMaxLength = 50;
+    public const int DescriptionMaxLength = 200;
+    public const int UnitPricePrecision = 18;
+    public const int UnitPriceScale = 2;
 
     public CreateOrderItemRequestValidator()
     {
+        // Report at most one error per property instead of every failing rule.
+        RuleLevelCascadeMode = CascadeMode.Stop;
+
         RuleFor(x => x.Sku)
             .NotEmpty()
             .MaximumLength(SkuMaxLength);

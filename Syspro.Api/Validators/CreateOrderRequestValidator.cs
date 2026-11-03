@@ -6,11 +6,18 @@ namespace Syspro.Api.Validators;
 public sealed class CreateOrderRequestValidator : AbstractValidator<CreateOrderRequest>
 {
     // Lengths mirror the column constraints configured in AppDbContext.
-    private const int LegacyCustomerIdMaxLength = 10;
-    private const int StatusMaxLength = 30;
+    public const int LegacyCustomerIdMaxLength = 10;
+    public const int StatusMaxLength = 30;
 
-    public CreateOrderRequestValidator()
+    // \z anchors at the true end of input; $ would also accept a trailing newline.
+    private const string CurrencyCodePattern = @"^[A-Za-z]{3}\z";
+
+    public CreateOrderRequestValidator(
+        IValidator<CreateOrderItemRequest> itemValidator)
     {
+        // Report at most one error per property instead of every failing rule.
+        RuleLevelCascadeMode = CascadeMode.Stop;
+
         RuleFor(x => x.CustomerId)
             .NotNull()
             .When(x => string.IsNullOrWhiteSpace(x.LegacyCustomerId))
@@ -25,7 +32,7 @@ public sealed class CreateOrderRequestValidator : AbstractValidator<CreateOrderR
 
         RuleFor(x => x.Currency)
             .NotEmpty()
-            .Matches("^[A-Za-z]{3}$")
+            .Matches(CurrencyCodePattern)
             .WithMessage("Currency must be a 3-letter ISO 4217 code.");
 
         RuleFor(x => x.Status)
@@ -38,6 +45,7 @@ public sealed class CreateOrderRequestValidator : AbstractValidator<CreateOrderR
 
         RuleForEach(x => x.Items)
             .NotNull()
-            .SetValidator(new CreateOrderItemRequestValidator());
+            .WithMessage("Order item must not be null.")
+            .SetValidator(itemValidator);
     }
 }

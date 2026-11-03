@@ -7,7 +7,8 @@ namespace Syspro.Tests.Validators;
 
 public class CreateOrderRequestValidatorTests
 {
-    private readonly CreateOrderRequestValidator _validator = new();
+    private readonly CreateOrderRequestValidator _validator =
+        new(new CreateOrderItemRequestValidator());
 
     private static CreateOrderRequest CreateValidRequest(
         int? customerId = 1,
@@ -41,45 +42,76 @@ public class CreateOrderRequestValidatorTests
         };
     }
 
+    private static CreateOrderRequest CreateRequestWithItem(CreateOrderItemRequest item)
+    {
+        return CreateValidRequest(items: [item]);
+    }
+
+    // decimal is not a valid attribute argument, so prices use TheoryData.
+    public static TheoryData<decimal> ValidUnitPrices => new()
+    {
+        0m,
+        0.01m,
+        10.99m,
+        10.990m,
+        9_999_999_999_999_999.99m
+    };
+
+    public static TheoryData<decimal> InvalidUnitPrices => new()
+    {
+        -0.01m,
+        -500m,
+        10.999m,
+        0.001m,
+        10_000_000_000_000_000m
+    };
+
+    // ---------- Valid requests ----------
+
     [Fact]
     public void Validate_WithCustomerId_IsValid()
     {
-        // Act
         var result = _validator.TestValidate(CreateValidRequest());
 
-        // Assert
         result.ShouldNotHaveAnyValidationErrors();
     }
 
     [Fact]
     public void Validate_WithLegacyCustomerIdOnly_IsValid()
     {
-        // Arrange
         var request = CreateValidRequest(
             customerId: null,
-            legacyCustomerId: "0000012345",
-            currency: "zar");
+            legacyCustomerId: "0000012345");
 
-        // Act
         var result = _validator.TestValidate(request);
 
-        // Assert
         result.ShouldNotHaveAnyValidationErrors();
     }
 
     [Fact]
-    public void Validate_WithFreeItem_IsValid()
+    public void Validate_WithBothCustomerIdentifiers_IsValid()
     {
-        // Arrange
         var request = CreateValidRequest(
-            items: [CreateValidItem(unitPrice: 0m)]);
+            customerId: 1,
+            legacyCustomerId: "0000012345");
 
-        // Act
         var result = _validator.TestValidate(request);
 
-        // Assert
         result.ShouldNotHaveAnyValidationErrors();
     }
+
+    [Fact]
+    public void Validate_WithMultipleValidItems_IsValid()
+    {
+        var request = CreateValidRequest(
+            items: [CreateValidItem(sku: "SKU-001"), CreateValidItem(sku: "SKU-002")]);
+
+        var result = _validator.TestValidate(request);
+
+        result.ShouldNotHaveAnyValidationErrors();
+    }
+
+    // ---------- Customer identification ----------
 
     [Theory]
     [InlineData(null)]
@@ -88,169 +120,344 @@ public class CreateOrderRequestValidatorTests
     public void Validate_WithoutCustomerIdentification_HasCustomerIdError(
         string? legacyCustomerId)
     {
-        // Arrange
         var request = CreateValidRequest(
             customerId: null,
             legacyCustomerId: legacyCustomerId);
 
-        // Act
         var result = _validator.TestValidate(request);
 
-        // Assert
         result.ShouldHaveValidationErrorFor(x => x.CustomerId)
             .WithErrorMessage("CustomerId or LegacyCustomerId must be provided.");
     }
 
     [Theory]
-    [InlineData(0)]
-    [InlineData(-5)]
-    public void Validate_WithNonPositiveCustomerId_HasCustomerIdError(int customerId)
+    [InlineData(1)]
+    [InlineData(int.MaxValue)]
+    public void Validate_WithPositiveCustomerId_HasNoCustomerIdError(int customerId)
     {
-        // Act
-        var result = _validator.TestValidate(
-            CreateValidRequest(customerId: customerId));
+        var result = _validator.TestValidate(CreateValidRequest(customerId: customerId));
 
-        // Assert
-        result.ShouldHaveValidationErrorFor(x => x.CustomerId);
-    }
-
-    [Fact]
-    public void Validate_WithTooLongLegacyCustomerId_HasLegacyCustomerIdError()
-    {
-        // Arrange
-        var request = CreateValidRequest(
-            customerId: null,
-            legacyCustomerId: new string('1', 11));
-
-        // Act
-        var result = _validator.TestValidate(request);
-
-        // Assert
-        result.ShouldHaveValidationErrorFor(x => x.LegacyCustomerId);
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("ZA")]
-    [InlineData("ZARR")]
-    [InlineData("Z1R")]
-    public void Validate_WithInvalidCurrency_HasCurrencyError(string currency)
-    {
-        // Act
-        var result = _validator.TestValidate(
-            CreateValidRequest(currency: currency));
-
-        // Assert
-        result.ShouldHaveValidationErrorFor(x => x.Currency);
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("0123456789012345678901234567890")]
-    public void Validate_WithInvalidStatus_HasStatusError(string status)
-    {
-        // Act
-        var result = _validator.TestValidate(
-            CreateValidRequest(status: status));
-
-        // Assert
-        result.ShouldHaveValidationErrorFor(x => x.Status);
-    }
-
-    [Fact]
-    public void Validate_WithNoItems_HasItemsError()
-    {
-        // Act
-        var result = _validator.TestValidate(CreateValidRequest(items: []));
-
-        // Assert
-        result.ShouldHaveValidationErrorFor(x => x.Items)
-            .WithErrorMessage("An order must contain at least one item.");
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void Validate_WithMissingSku_HasSkuError(string sku)
-    {
-        // Act
-        var result = _validator.TestValidate(
-            CreateValidRequest(items: [CreateValidItem(sku: sku)]));
-
-        // Assert
-        result.ShouldHaveValidationErrorFor("Items[0].Sku");
-    }
-
-    [Fact]
-    public void Validate_WithTooLongSku_HasSkuError()
-    {
-        // Act
-        var result = _validator.TestValidate(
-            CreateValidRequest(items: [CreateValidItem(sku: new string('S', 51))]));
-
-        // Assert
-        result.ShouldHaveValidationErrorFor("Items[0].Sku");
-    }
-
-    [Fact]
-    public void Validate_WithTooLongDescription_HasDescriptionError()
-    {
-        // Act
-        var result = _validator.TestValidate(
-            CreateValidRequest(
-                items: [CreateValidItem(description: new string('D', 201))]));
-
-        // Assert
-        result.ShouldHaveValidationErrorFor("Items[0].Description");
+        result.ShouldNotHaveValidationErrorFor(x => x.CustomerId);
     }
 
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    public void Validate_WithNonPositiveQuantity_HasQuantityError(int quantity)
+    [InlineData(int.MinValue)]
+    public void Validate_WithNonPositiveCustomerId_HasCustomerIdError(int customerId)
     {
-        // Act
-        var result = _validator.TestValidate(
-            CreateValidRequest(items: [CreateValidItem(quantity: quantity)]));
+        var result = _validator.TestValidate(CreateValidRequest(customerId: customerId));
 
-        // Assert
-        result.ShouldHaveValidationErrorFor("Items[0].Quantity");
+        result.ShouldHaveValidationErrorFor(x => x.CustomerId);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(CreateOrderRequestValidator.LegacyCustomerIdMaxLength)]
+    public void Validate_WithLegacyCustomerIdWithinMaxLength_IsValid(int length)
+    {
+        var request = CreateValidRequest(
+            customerId: null,
+            legacyCustomerId: new string('1', length));
+
+        var result = _validator.TestValidate(request);
+
+        result.ShouldNotHaveAnyValidationErrors();
     }
 
     [Fact]
-    public void Validate_WithNegativeUnitPrice_HasUnitPriceError()
+    public void Validate_WithLegacyCustomerIdOverMaxLength_HasLegacyCustomerIdError()
     {
-        // Act
-        var result = _validator.TestValidate(
-            CreateValidRequest(items: [CreateValidItem(unitPrice: -0.01m)]));
+        var request = CreateValidRequest(
+            customerId: null,
+            legacyCustomerId: new string('1', CreateOrderRequestValidator.LegacyCustomerIdMaxLength + 1));
 
-        // Assert
-        result.ShouldHaveValidationErrorFor("Items[0].UnitPrice");
+        var result = _validator.TestValidate(request);
+
+        result.ShouldHaveValidationErrorFor(x => x.LegacyCustomerId);
+    }
+
+    // ---------- Currency ----------
+
+    [Theory]
+    [InlineData("ZAR")]
+    [InlineData("zar")]
+    [InlineData("Usd")]
+    public void Validate_WithThreeLetterCurrency_HasNoCurrencyError(string currency)
+    {
+        var result = _validator.TestValidate(CreateValidRequest(currency: currency));
+
+        result.ShouldNotHaveValidationErrorFor(x => x.Currency);
+    }
+
+    [Theory]
+    [InlineData("ZA")]
+    [InlineData("ZARR")]
+    [InlineData("Z1R")]
+    [InlineData("ZA ")]
+    [InlineData(" ZAR")]
+    [InlineData("ZAR\n")]
+    [InlineData("Z-R")]
+    public void Validate_WithMalformedCurrency_HasCurrencyFormatError(string currency)
+    {
+        var result = _validator.TestValidate(CreateValidRequest(currency: currency));
+
+        result.ShouldHaveValidationErrorFor(x => x.Currency)
+            .WithErrorMessage("Currency must be a 3-letter ISO 4217 code.");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void Validate_WithMissingCurrency_HasSingleCurrencyError(string? currency)
+    {
+        var request = CreateValidRequest(currency: currency!);
+
+        var result = _validator.TestValidate(request);
+
+        Assert.Single(result.Errors, error => error.PropertyName == "Currency");
+    }
+
+    // ---------- Status ----------
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(CreateOrderRequestValidator.StatusMaxLength)]
+    public void Validate_WithStatusWithinMaxLength_HasNoStatusError(int length)
+    {
+        var result = _validator.TestValidate(
+            CreateValidRequest(status: new string('S', length)));
+
+        result.ShouldNotHaveValidationErrorFor(x => x.Status);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void Validate_WithMissingStatus_HasStatusError(string? status)
+    {
+        var result = _validator.TestValidate(CreateValidRequest(status: status!));
+
+        result.ShouldHaveValidationErrorFor(x => x.Status);
     }
 
     [Fact]
-    public void Validate_WithMoreThanTwoDecimalPlaces_HasUnitPriceError()
+    public void Validate_WithStatusOverMaxLength_HasStatusError()
     {
-        // Act
         var result = _validator.TestValidate(
-            CreateValidRequest(items: [CreateValidItem(unitPrice: 10.999m)]));
+            CreateValidRequest(status: new string('S', CreateOrderRequestValidator.StatusMaxLength + 1)));
 
-        // Assert
-        result.ShouldHaveValidationErrorFor("Items[0].UnitPrice");
+        result.ShouldHaveValidationErrorFor(x => x.Status);
+    }
+
+    // ---------- Items collection ----------
+
+    [Fact]
+    public void Validate_WithEmptyItems_HasItemsError()
+    {
+        var result = _validator.TestValidate(CreateValidRequest(items: []));
+
+        result.ShouldHaveValidationErrorFor(x => x.Items)
+            .WithErrorMessage("An order must contain at least one item.");
     }
 
     [Fact]
-    public void Validate_WithInvalidSecondItem_ReportsErrorAgainstThatItem()
+    public void Validate_WithNullItems_HasItemsError()
     {
-        // Arrange
+        var request = new CreateOrderRequest
+        {
+            CustomerId = 1,
+            Currency = "ZAR",
+            Status = "Created",
+            Items = null!
+        };
+
+        var result = _validator.TestValidate(request);
+
+        result.ShouldHaveValidationErrorFor(x => x.Items)
+            .WithErrorMessage("An order must contain at least one item.");
+    }
+
+    [Fact]
+    public void Validate_WithNullItemEntry_HasErrorForThatEntry()
+    {
+        var request = CreateValidRequest(items: [CreateValidItem(), null!]);
+
+        var result = _validator.TestValidate(request);
+
+        result.ShouldHaveValidationErrorFor("Items[1]")
+            .WithErrorMessage("Order item must not be null.");
+        result.ShouldNotHaveValidationErrorFor("Items[0]");
+    }
+
+    [Fact]
+    public void Validate_WithInvalidSecondItem_ReportsErrorAgainstThatItemOnly()
+    {
         var request = CreateValidRequest(
             items: [CreateValidItem(), CreateValidItem(quantity: 0)]);
 
-        // Act
         var result = _validator.TestValidate(request);
 
-        // Assert
         result.ShouldHaveValidationErrorFor("Items[1].Quantity");
         result.ShouldNotHaveValidationErrorFor("Items[0].Quantity");
+    }
+
+    // ---------- SKU ----------
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(CreateOrderItemRequestValidator.SkuMaxLength)]
+    public void Validate_WithSkuWithinMaxLength_HasNoSkuError(int length)
+    {
+        var result = _validator.TestValidate(
+            CreateRequestWithItem(CreateValidItem(sku: new string('S', length))));
+
+        result.ShouldNotHaveValidationErrorFor("Items[0].Sku");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void Validate_WithMissingSku_HasSkuError(string? sku)
+    {
+        var result = _validator.TestValidate(
+            CreateRequestWithItem(CreateValidItem(sku: sku!)));
+
+        result.ShouldHaveValidationErrorFor("Items[0].Sku");
+    }
+
+    [Fact]
+    public void Validate_WithSkuOverMaxLength_HasSkuError()
+    {
+        var result = _validator.TestValidate(
+            CreateRequestWithItem(CreateValidItem(
+                sku: new string('S', CreateOrderItemRequestValidator.SkuMaxLength + 1))));
+
+        result.ShouldHaveValidationErrorFor("Items[0].Sku");
+    }
+
+    // ---------- Description ----------
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(CreateOrderItemRequestValidator.DescriptionMaxLength)]
+    public void Validate_WithDescriptionWithinMaxLength_HasNoDescriptionError(int length)
+    {
+        var result = _validator.TestValidate(
+            CreateRequestWithItem(CreateValidItem(description: new string('D', length))));
+
+        result.ShouldNotHaveValidationErrorFor("Items[0].Description");
+    }
+
+    [Fact]
+    public void Validate_WithNullDescription_HasDescriptionError()
+    {
+        var result = _validator.TestValidate(
+            CreateRequestWithItem(CreateValidItem(description: null!)));
+
+        result.ShouldHaveValidationErrorFor("Items[0].Description");
+    }
+
+    [Fact]
+    public void Validate_WithDescriptionOverMaxLength_HasDescriptionError()
+    {
+        var result = _validator.TestValidate(
+            CreateRequestWithItem(CreateValidItem(
+                description: new string('D', CreateOrderItemRequestValidator.DescriptionMaxLength + 1))));
+
+        result.ShouldHaveValidationErrorFor("Items[0].Description");
+    }
+
+    // ---------- Quantity ----------
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(int.MaxValue)]
+    public void Validate_WithPositiveQuantity_HasNoQuantityError(int quantity)
+    {
+        var result = _validator.TestValidate(
+            CreateRequestWithItem(CreateValidItem(quantity: quantity)));
+
+        result.ShouldNotHaveValidationErrorFor("Items[0].Quantity");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(int.MinValue)]
+    public void Validate_WithNonPositiveQuantity_HasQuantityError(int quantity)
+    {
+        var result = _validator.TestValidate(
+            CreateRequestWithItem(CreateValidItem(quantity: quantity)));
+
+        result.ShouldHaveValidationErrorFor("Items[0].Quantity");
+    }
+
+    // ---------- Unit price ----------
+
+    [Theory]
+    [MemberData(nameof(ValidUnitPrices))]
+    public void Validate_WithValidUnitPrice_HasNoUnitPriceError(decimal unitPrice)
+    {
+        var result = _validator.TestValidate(
+            CreateRequestWithItem(CreateValidItem(unitPrice: unitPrice)));
+
+        result.ShouldNotHaveValidationErrorFor("Items[0].UnitPrice");
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidUnitPrices))]
+    public void Validate_WithInvalidUnitPrice_HasSingleUnitPriceError(decimal unitPrice)
+    {
+        var result = _validator.TestValidate(
+            CreateRequestWithItem(CreateValidItem(unitPrice: unitPrice)));
+
+        Assert.Single(result.Errors, error => error.PropertyName == "Items[0].UnitPrice");
+    }
+
+    // ---------- Multiple errors ----------
+
+    [Fact]
+    public void Validate_WithManyInvalidFields_ReportsOneErrorPerField()
+    {
+        var request = new CreateOrderRequest
+        {
+            CustomerId = null,
+            LegacyCustomerId = null,
+            Currency = "",
+            Status = "",
+            Items =
+            [
+                new CreateOrderItemRequest
+                {
+                    Sku = "",
+                    Description = null!,
+                    UnitPrice = -1m,
+                    Quantity = 0
+                }
+            ]
+        };
+
+        var result = _validator.TestValidate(request);
+
+        var failingProperties = result.Errors
+            .Select(error => error.PropertyName)
+            .ToList();
+
+        Assert.Equal(
+            new[]
+            {
+                "CustomerId",
+                "Currency",
+                "Status",
+                "Items[0].Sku",
+                "Items[0].Description",
+                "Items[0].Quantity",
+                "Items[0].UnitPrice"
+            },
+            failingProperties);
     }
 }
