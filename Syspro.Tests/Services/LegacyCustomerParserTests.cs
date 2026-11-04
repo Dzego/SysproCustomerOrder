@@ -210,22 +210,61 @@ public class LegacyCustomerParserTests
         Assert.Equal($"Invalid tier: {tier}", exception.Message);
     }
 
-    // ---------- Known gap ----------
+    // ---------- Legacy customer ID ----------
 
-    // Characterizes current behaviour rather than endorsing it: the parser does
-    // not require these fields, so a row can create a customer with blank values.
     [Theory]
-    [InlineData("", "John Smith", "john@example.com")]
-    [InlineData("0000012345", "", "john@example.com")]
-    [InlineData("0000012345", "John Smith", "")]
-    public void Parse_BlankIdentityFields_AreCurrentlyAccepted(
-        string legacyCustomerId,
-        string name,
-        string email)
+    [InlineData("1")]
+    [InlineData("123")]
+    [InlineData("ABC123")]
+    [InlineData("1234567890")]
+    [InlineData("A-1_b/2!?~")]
+    [InlineData("AB CD")]
+    public void Parse_IdOfOneToTenPrintableAsciiCharacters_IsAccepted(string legacyCustomerId)
     {
-        var result = _parser.Parse(BuildLine(legacyCustomerId, name, email));
+        Assert.Equal(legacyCustomerId, _parser.Parse(BuildLine(legacyCustomerId)).LegacyCustomerId);
+    }
 
-        Assert.Equal(legacyCustomerId, result.LegacyCustomerId);
+    [Theory]
+    [InlineData("")]
+    [InlineData("          ")]
+    [InlineData("\t")]
+    [InlineData("\u3000\u3000")]
+    public void Parse_BlankId_IsRejected(string legacyCustomerId)
+    {
+        var exception = Assert.Throws<LegacyCustomerParseException>(
+            () => _parser.Parse(BuildLine(legacyCustomerId)));
+
+        Assert.Equal("Invalid LegacyCustomerId: the value is blank.", exception.Message);
+    }
+
+    // Each of these becomes '?' in a varchar column, or could not be matched reliably, so
+    // accepting them could update an unrelated customer.
+    [Theory]
+    [InlineData("日本")]
+    [InlineData("12é45")]
+    [InlineData("A\tB")]
+    [InlineData("A\u0000B")]
+    [InlineData("A\u007FB")]
+    [InlineData("\uFFFD123")]
+    [InlineData("😀")]
+    public void Parse_IdWithUnsupportedCharacters_IsRejected(string legacyCustomerId)
+    {
+        var exception = Assert.Throws<LegacyCustomerParseException>(
+            () => _parser.Parse(BuildLine(legacyCustomerId)));
+
+        Assert.Equal(
+            "Invalid LegacyCustomerId: only printable ASCII characters are allowed.",
+            exception.Message);
+    }
+
+    // The ID rule changed these, and nothing else: other fields stay as permissive as before.
+    [Theory]
+    [InlineData("", "john@example.com")]
+    [InlineData("John Smith", "")]
+    public void Parse_BlankNameOrEmail_IsStillAccepted(string name, string email)
+    {
+        var result = _parser.Parse(BuildLine("0000012345", name, email));
+
         Assert.Equal(name, result.Name);
         Assert.Equal(email, result.Email);
     }

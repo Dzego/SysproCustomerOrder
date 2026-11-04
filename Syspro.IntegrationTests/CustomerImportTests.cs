@@ -40,7 +40,8 @@ public sealed class CustomerImportTests(SqlServerFixture fixture) : SqlServerTes
         return new CustomerImportService(
             new LegacyCustomerParser(),
             new CustomerRepository(dbContext),
-            new ImportRepository(dbContext));
+            new ImportRepository(dbContext),
+            TestData.ImportOptions());
     }
 
     // ---------- Valid rows ----------

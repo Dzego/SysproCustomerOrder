@@ -77,18 +77,27 @@ public sealed class ImportJobInputReaderTests : SqlServerTestBase
 
         return new CustomerImportJobRunner(
             repository,
-            new CustomerImportService(new LegacyCustomerParser(), new CustomerRepository(dbContext), repository),
+            new CustomerImportService(new LegacyCustomerParser(), new CustomerRepository(dbContext), repository,
+            TestData.ImportOptions()),
             Microsoft.Extensions.Options.Options.Create(new Syspro.Api.BackgroundJobs.CustomerImportWorkerOptions()),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<CustomerImportJobRunner>.Instance);
+            new TestOutputLogger<CustomerImportJobRunner>(_output));
     }
 
     private async Task<ImportLog> RunJobAsync(byte[] input)
     {
         var pending = await AddPendingJobAsync(input: input);
 
-        await using var dbContext = CreateDbContext();
+        // These tests check the outcome, not the number of executions. A real connection
+        // failure requeues the job, and it then resumes, so run until nothing is waiting.
+        while (true)
+        {
+            await using var dbContext = CreateDbContext();
 
-        Assert.True(await CreateRunner(dbContext).RunNextJobAsync(CancellationToken.None));
+            if (!await CreateRunner(dbContext).RunNextJobAsync(CancellationToken.None))
+            {
+                break;
+            }
+        }
 
         return await QueryAsync(context => context.ImportLogs.SingleAsync(x => x.Id == pending.Id));
     }
@@ -369,7 +378,7 @@ public sealed class ImportJobInputReaderTests : SqlServerTestBase
     // Lookups run on the same connection between chunk reads. Without MARS, a reader left
     // open by a chunk read would make the next lookup throw, so completing proves none is.
     [SqlServerFact]
-    public async Task ChunkReads_LeaveNoReaderOrTransactionOpenForCustomerLookups()
+    public async Task ChunkReads_LeaveNoReaderOpenForBatchTransactions()
     {
         var builder = new StringBuilder();
 
@@ -396,8 +405,10 @@ public sealed class ImportJobInputReaderTests : SqlServerTestBase
 
         Assert.Equal(ImportJobStatus.Completed, job.Status);
         Assert.Equal(60, job.CreatedCount);
-        Assert.Equal(60, recorder.Lookups);
-        Assert.Equal(0, recorder.LookupsInsideATransaction);
+
+        // One set-based lookup per batch, each inside that batch's transaction.
+        Assert.Equal(30, recorder.Lookups);
+        Assert.Equal(30, recorder.LookupsInsideATransaction);
     }
 
     // ---------- Snapshot safety ----------
@@ -422,7 +433,8 @@ public sealed class ImportJobInputReaderTests : SqlServerTestBase
             var service = new CustomerImportService(
                 new LegacyCustomerParser(),
                 new CustomerRepository(dbContext),
-                repository);
+                repository,
+            TestData.ImportOptions());
 
             await Assert.ThrowsAsync<FailOnCommitInterceptor.CommitFailedException>(
                 () => service.ImportAsync(claimed, input!, CancellationToken.None));

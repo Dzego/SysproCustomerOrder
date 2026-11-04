@@ -4,6 +4,7 @@ using Syspro.Api.Data;
 using Syspro.Api.Models;
 using Syspro.Api.Repositories;
 using Syspro.Api.Services;
+using Syspro.Tests.TestSupport;
 using Xunit;
 
 namespace Syspro.Tests.Services;
@@ -224,7 +225,8 @@ public sealed class ImportInputDecodingTests : IDisposable
         return new CustomerImportService(
             new LegacyCustomerParser(),
             new CustomerRepository(dbContext),
-            new ImportRepository(dbContext));
+            new InMemoryImportRepository(dbContext),
+            Microsoft.Extensions.Options.Options.Create(new CustomerImportOptions()));
     }
 
     private static async Task<ImportLog> AddClaimedJobAsync(AppDbContext dbContext)
@@ -243,7 +245,8 @@ public sealed class ImportInputDecodingTests : IDisposable
         dbContext.ImportLogs.Add(job);
         await dbContext.SaveChangesAsync();
 
-        dbContext.Entry(job.Input).State = EntityState.Detached;
+        // A claimed job and its input are not tracked, so match that here.
+        dbContext.ChangeTracker.Clear();
         job.Input = null;
 
         return job;

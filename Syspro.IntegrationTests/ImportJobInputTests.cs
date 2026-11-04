@@ -331,7 +331,7 @@ public sealed class ImportJobInputTests : SqlServerTestBase
 
         Assert.Equal("Failed", job.Status);
         Assert.Equal(
-            "The import job has no stored input, so it could not run. No customers were changed. Submit a new import.",
+            "The import job has no stored input, so it could not run. Submit a new import. No customers were changed.",
             job.FailureReason);
         Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
     }

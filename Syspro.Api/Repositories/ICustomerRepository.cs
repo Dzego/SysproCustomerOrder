@@ -4,9 +4,11 @@ namespace Syspro.Api.Repositories;
 
 public interface ICustomerRepository
 {
-    Task<Customer?> GetByLegacyCustomerIdAsync(
-        string legacyCustomerId,
+    // Keys ignore case, matching the unique index under SQL Server's default collation.
+    // The returned customers are tracked, so changes to them are saved with the batch.
+    Task<Dictionary<string, Customer>> GetByLegacyCustomerIdsAsync(
+        IReadOnlyCollection<string> legacyCustomerIds,
         CancellationToken cancellationToken);
 
-    Task AddAsync(Customer customer, CancellationToken cancellationToken);
+    void Add(Customer customer);
 }

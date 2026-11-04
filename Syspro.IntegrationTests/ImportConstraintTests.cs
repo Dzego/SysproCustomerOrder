@@ -446,9 +446,9 @@ public sealed class ImportConstraintTests(SqlServerFixture fixture) : SqlServerT
         Assert.Equal(2, job.ConsecutiveFailureCount);
     }
 
-    // Nothing updates the column until Stage 3, so a retried job must leave it alone.
+    // Counted on claim, because a crash cannot record anything afterwards.
     [SqlServerFact]
-    public async Task ClaimingAJob_DoesNotChangeConsecutiveFailureCount()
+    public async Task ClaimingAJob_CountsAnAttemptAndAPossibleFailure()
     {
         await AddPendingJobAsync();
 
@@ -461,6 +461,6 @@ public sealed class ImportConstraintTests(SqlServerFixture fixture) : SqlServerT
         var job = await QueryAsync(context => context.ImportLogs.SingleAsync());
 
         Assert.Equal(1, job.AttemptCount);
-        Assert.Equal(0, job.ConsecutiveFailureCount);
+        Assert.Equal(1, job.ConsecutiveFailureCount);
     }
 }

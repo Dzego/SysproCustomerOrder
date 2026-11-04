@@ -5,9 +5,10 @@ namespace Syspro.Api.Services;
 
 public interface ICustomerImportService
 {
-    // Writes the customers, row errors and the job's Completed status, and removes
-    // the job's stored input, in one transaction. A job that is not Completed has
-    // therefore changed nothing and still has its input for a retry.
+    // Resumes after the job's checkpoint, and commits one transaction per batch: customers,
+    // row errors, counters and the checkpoint together. The last batch also completes the
+    // job and removes its stored input. A job that is not Completed can have earlier
+    // batches applied, and still has its input so that a retry can resume.
     Task<ImportResult> ImportAsync(
         ImportLog job,
         Stream input,

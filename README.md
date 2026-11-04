@@ -375,18 +375,20 @@ GET /api/import/jobs/{id}
 }
 ```
 
-The exact `created` and `updated` values depend on the current state of the database. The counts stay at zero until the job has completed. An unknown id returns `404 Not Found`.
+The exact `created` and `updated` values depend on the current state of the database. The counts show what has been committed so far, so they grow while the job runs. An unknown id returns `404 Not Found`.
 
 The `failed` count covers invalid rows, which are stored in `ImportErrors`. They do not make a job fail. A job is `Failed` only when the import as a whole could not finish, and `failureReason` then holds a safe description. Exception details go only to the application logs.
+
+> **A `Failed` job may have changed some customers.** Lines are committed in batches, and earlier batches stay applied when a later one fails. Nothing undoes them. The counts and `failureReason` state how far the job got, for example: "The import failed unexpectedly. Lines 1 to 2000 were committed and remain applied. Processing stopped at line 2001." Sending a new request re-imports the file from the start, which is safe because customers are matched by `LegacyCustomerId`.
 
 ## Job Lifecycle
 
 | Status | Meaning |
 | --- | --- |
 | `Pending` | Saved and waiting for the worker |
-| `Processing` | Claimed by the worker |
-| `Completed` | Finished, with results saved |
-| `Failed` | Finished without changing any customers |
+| `Processing` | Claimed by the worker, and committing batches |
+| `Completed` | Every line was processed |
+| `Failed` | Stopped permanently. Batches committed before that remain applied |
 
 ```text
 Pending -> Processing -> Completed or Failed
@@ -397,25 +399,30 @@ The job is stored in `ImportLogs`, where the database enforces valid status and 
 
 ## Restarts and Interruptions
 
-The customers, row errors, `Completed` status and removal of the stored input are committed in one transaction, so a job that is not `Completed` has changed nothing and still has its input. This is what makes running an interrupted job again safe.
+Each batch, 1,000 lines by default, is one transaction containing its customers, row errors and counters. `ProcessedCount` is the checkpoint, so it can never disagree with what was committed. The last batch also sets `Completed` and removes the stored input.
+
+A job that runs again resumes at the first uncommitted line. Committed lines are not applied again, and their errors are not recorded twice. If a connection fails around a commit, the worker cannot tell whether it succeeded, so it rereads the job from the database before deciding what to do.
+
+This gives each line's database changes **at most one commit per job, not exactly-once execution**: a batch can be computed and rolled back several times, and other readers can see a job's earlier batches before it finishes.
 
 | Event | Result |
 | --- | --- |
 | Client disconnects before the job is saved | No job is created |
 | Client disconnects after `202 Accepted` | The job is unaffected |
 | API stops or restarts with jobs `Pending` | They run after the restart |
-| Graceful shutdown during an import | The job returns to `Pending` without using an attempt |
-| Crash during an import | The job is left `Processing`, and is requeued at the next startup |
-| Job interrupted by crashes `MaxAttempts` times | The job becomes `Failed`, which stops a job that crashes the process from looping forever |
-| Import fails while running, for example a database error | The job becomes `Failed` and is not retried automatically. Send a new request to try again |
+| Graceful shutdown during an import | The batch in progress rolls back and the job returns to `Pending`, not counted as a failure. It resumes after restart |
+| Crash during an import | The job is left `Processing`, requeued at the next startup, and resumes |
+| Temporary database failure, such as a deadlock, timeout or lost connection | The batch rolls back and the job retries from its checkpoint |
+| `MaxAttempts` executions in a row with no batch committed | The job becomes `Failed`, which stops a job that crashes the process or keeps failing from looping forever |
+| Any other failure in a batch | That batch rolls back and the job becomes `Failed`. Earlier batches remain applied. Send a new request to try again |
 
 ## Job Counters and Attempts
 
 | Column | Meaning |
 | --- | --- |
 | `ProcessedCount` | Lines processed. The database requires this to equal `CreatedCount + UpdatedCount + FailedCount` |
-| `AttemptCount` | Executions of the job, not counting any ended by a graceful shutdown. The retry limit currently applies to this value |
-| `ConsecutiveFailureCount` | Reserved for retry limits. Nothing updates it yet, so it stays at 0 |
+| `AttemptCount` | Lifetime executions of the job, for reporting |
+| `ConsecutiveFailureCount` | Executions since the job last committed a batch. `MaxAttempts` applies to this. It is counted when a job starts, because a crash cannot record anything, and undone by a graceful shutdown |
 
 `ImportErrors` allows one error for each line of a job.
 
@@ -470,7 +477,7 @@ The snapshot captures the file as it is when the request arrives, so a file that
 | Job status | Stored input |
 | --- | --- |
 | `Pending` | Kept |
-| `Processing`, including after a crash or failed commit | Kept, because a retry needs it |
+| `Processing`, including after a crash or failed commit | Kept, because a retry needs it. A retry reads the committed lines again to rebuild its duplicate check |
 | Requeued after an interruption | Kept |
 | `Completed` | Deleted in the same transaction as the results |
 | `Failed` | Deleted in the same transaction as the status |
@@ -481,11 +488,14 @@ No scheduled cleanup is needed, because a finished job removes its own input. Re
 
 ```json
 "CustomerImport": {
-  "MaxInputBytes": 52428800
+  "MaxInputBytes": 52428800,
+  "BatchSize": 1000
 }
 ```
 
-The default is 50 MiB, and the maximum allowed setting is 1 GiB. A larger file returns `413 Payload Too Large` and creates no job. The whole file is held in memory while it is accepted. The worker reads it back from SQL Server in 1 MiB chunks, so reading the snapshot does not depend on its size, although customer changes still accumulate in memory until the import saves them.
+The default is 50 MiB, and the maximum allowed setting is 1 GiB. A larger file returns `413 Payload Too Large` and creates no job. The whole file is held in memory while it is accepted. The worker reads it back from SQL Server in 1 MiB chunks and tracks one batch at a time. It also keeps every `LegacyCustomerId` seen so far in memory to detect duplicates, so its memory use still grows with the number of customers in the file.
+
+`BatchSize` must be between 1 and 10,000. Larger batches hold locks for longer.
 
 --- | --- |
 | Is replaced before the job runs | The job imports the new content, not what was there when it was accepted |
@@ -572,7 +582,7 @@ The service is responsible for:
 
 The repositories are responsible for persistence operations.
 
-`IImportRepository.SaveChangesAsync` is the only save in an import. Both repositories share one scoped `AppDbContext`, so that one call commits the customers, row errors, job status and removal of the stored input in a single transaction.
+Both repositories share one scoped `AppDbContext`, so `IImportRepository.ExecuteInTransactionAsync` gives each batch one explicit transaction across them, and clears change tracking afterwards.
 
 A generic `IRepository<T>` abstraction was deliberately avoided. The repositories expose focused operations required by the application rather than wrapping every EF Core CRUD operation.
 
@@ -635,6 +645,8 @@ LineNumber
 RawData
 Reason
 ```
+
+A `LegacyCustomerId` must be 1 to 10 printable ASCII characters. A blank ID, or one with other characters, is recorded as a row error. The column is `varchar`, where unsupported characters become `?`, so different IDs could otherwise match the same row and update the wrong customer.
 
 Example parsing errors include:
 

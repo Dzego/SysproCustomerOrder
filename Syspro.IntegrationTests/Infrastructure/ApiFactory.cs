@@ -21,7 +21,8 @@ public sealed class ApiFactory(
     IInterceptor[]? interceptors = null,
     IOrderService? orderService = null,
     bool runImportWorker = false,
-    int? maxInputBytes = null) : WebApplicationFactory<Program>
+    int? maxInputBytes = null,
+    int? batchSize = null) : WebApplicationFactory<Program>
 {
     public CapturedLogs Logs { get; } = new();
 
@@ -52,6 +53,12 @@ public sealed class ApiFactory(
             {
                 services.Configure<CustomerImportOptions>(options =>
                     options.MaxInputBytes = maxInputBytes.Value);
+            }
+
+            if (batchSize is not null)
+            {
+                services.Configure<CustomerImportOptions>(options =>
+                    options.BatchSize = batchSize.Value);
             }
 
             services.RemoveAll<DbContextOptions<AppDbContext>>();

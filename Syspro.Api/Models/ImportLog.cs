@@ -15,11 +15,11 @@ public class ImportLog
 
     public DateTime? CompletedAt { get; set; }
 
-    // Executions of this job, not counting any ended by a graceful shutdown. The retry
-    // limit currently applies to this value.
+    // Lifetime executions of this job, for reporting.
     public int AttemptCount { get; set; }
 
-    // Reserved for retry limits. Nothing updates it yet.
+    // Executions since the job last committed a batch, which the retry limit applies to.
+    // Counted when a job is claimed, because a crash cannot record anything afterwards.
     public int ConsecutiveFailureCount { get; set; }
 
     // Returned to clients, so it must never contain exception details.

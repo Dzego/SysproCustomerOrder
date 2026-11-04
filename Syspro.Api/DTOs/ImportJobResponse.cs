@@ -2,7 +2,8 @@ using Syspro.Api.Models;
 
 namespace Syspro.Api.DTOs;
 
-// The counts remain zero until the job has completed.
+// The counts show what has been committed so far, so they grow while a job runs, and a
+// Failed job can have non-zero counts for the batches it applied.
 public sealed class ImportJobResponse
 {
     public int Id { get; init; }

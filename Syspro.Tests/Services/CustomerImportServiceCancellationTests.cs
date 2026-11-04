@@ -30,7 +30,8 @@ public sealed class CustomerImportServiceCancellationTests
         _service = new CustomerImportService(
             new LegacyCustomerParser(),
             _customerRepository,
-            _importRepository);
+            _importRepository,
+            Microsoft.Extensions.Options.Options.Create(new CustomerImportOptions()));
     }
 
     private static byte[] ToInput(params string[] lines)
@@ -46,22 +47,19 @@ public sealed class CustomerImportServiceCancellationTests
 
         public int LookupCount { get; private set; }
 
-        public Task<Customer?> GetByLegacyCustomerIdAsync(
-            string legacyCustomerId,
+        public Task<Dictionary<string, Customer>> GetByLegacyCustomerIdsAsync(
+            IReadOnlyCollection<string> legacyCustomerIds,
             CancellationToken cancellationToken)
         {
             ReceivedTokens.Add(cancellationToken);
             LookupCount++;
             OnLookup?.Invoke();
 
-            return Task.FromResult<Customer?>(null);
+            return Task.FromResult(new Dictionary<string, Customer>(StringComparer.OrdinalIgnoreCase));
         }
 
-        public Task AddAsync(Customer customer, CancellationToken cancellationToken)
+        public void Add(Customer customer)
         {
-            ReceivedTokens.Add(cancellationToken);
-
-            return Task.CompletedTask;
         }
     }
 
@@ -76,12 +74,57 @@ public sealed class CustomerImportServiceCancellationTests
             throw new NotSupportedException();
         }
 
+        public int TransactionCount { get; private set; }
+
+        public bool IsInTransaction { get; private set; }
+
+        public bool AcceptProgress { get; set; } = true;
+
         public Task SaveChangesAsync(CancellationToken cancellationToken)
         {
             ReceivedTokens.Add(cancellationToken);
             SaveCount++;
 
             return Task.CompletedTask;
+        }
+
+        public async Task ExecuteInTransactionAsync(
+            Func<CancellationToken, Task> work,
+            CancellationToken cancellationToken)
+        {
+            ReceivedTokens.Add(cancellationToken);
+            TransactionCount++;
+            IsInTransaction = true;
+
+            try
+            {
+                await work(cancellationToken);
+            }
+            finally
+            {
+                IsInTransaction = false;
+            }
+        }
+
+        public void AddErrors(IEnumerable<ImportError> errors)
+        {
+        }
+
+        public Task<bool> ApplyBatchProgressAsync(
+            int id,
+            int expectedProcessedCount,
+            ImportBatchProgress progress,
+            bool completeJob,
+            CancellationToken cancellationToken)
+        {
+            ReceivedTokens.Add(cancellationToken);
+
+            return Task.FromResult(AcceptProgress);
+        }
+
+        public Task RequeueJobAsync(int id, CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
         }
 
         public Task<Stream?> OpenJobInputAsync(int id, CancellationToken cancellationToken)
@@ -134,8 +177,8 @@ public sealed class CustomerImportServiceCancellationTests
         await _service.ImportAsync(_job, new MemoryStream(input), cancellationSource.Token);
 
         // Assert
-        Assert.Equal(2, _customerRepository.ReceivedTokens.Count);
-        Assert.Single(_importRepository.ReceivedTokens);
+        Assert.Single(_customerRepository.ReceivedTokens);
+        Assert.Equal(3, _importRepository.ReceivedTokens.Count);
 
         Assert.All(
             _customerRepository.ReceivedTokens.Concat(_importRepository.ReceivedTokens),
@@ -176,6 +219,52 @@ public sealed class CustomerImportServiceCancellationTests
         Assert.Equal(0, _importRepository.SaveCount);
     }
 
+    // A reader held open during a batch would block the connection the batch is using.
+    [Fact]
+    public async Task ImportAsync_ReadsTheInputOnlyBetweenTransactions()
+    {
+        var content = ToInput(FirstValidLine, SecondValidLine);
+
+        var service = new CustomerImportService(
+            new LegacyCustomerParser(),
+            _customerRepository,
+            _importRepository,
+            Microsoft.Extensions.Options.Options.Create(new CustomerImportOptions { BatchSize = 1 }));
+
+        var readDuringTransaction = false;
+
+        await using var stream = new Syspro.Api.Repositories.ImportJobInputStream(
+            content.Length,
+            (offset, destination, _) =>
+            {
+                readDuringTransaction |= _importRepository.IsInTransaction;
+
+                var count = Math.Min(destination.Length, content.Length - (int)offset);
+
+                content.AsMemory((int)offset, count).CopyTo(destination);
+
+                return Task.FromResult(count);
+            },
+            chunkBytes: 16);
+
+        await service.ImportAsync(_job, stream, CancellationToken.None);
+
+        Assert.Equal(2, _importRepository.TransactionCount);
+        Assert.False(readDuringTransaction);
+    }
+
+    [Fact]
+    public async Task ImportAsync_WhenTheCheckpointWasMovedElsewhere_StopsWithoutSaving()
+    {
+        _importRepository.AcceptProgress = false;
+
+        var action = () => _service.ImportAsync(_job, new MemoryStream(ToInput(FirstValidLine)), CancellationToken.None);
+
+        await Assert.ThrowsAsync<ImportJobStateChangedException>(action);
+        Assert.Equal(0, _importRepository.SaveCount);
+        Assert.Equal(0, _job.ProcessedCount);
+    }
+
     [Fact]
     public async Task ImportAsync_WhenLookupIsCancelled_DoesNotRecordRowFailure()
     {
@@ -195,7 +284,6 @@ public sealed class CustomerImportServiceCancellationTests
 
         Assert.Equal(ImportJobStatus.Processing, _job.Status);
         Assert.Equal(0, _job.FailedCount);
-        Assert.Empty(_job.Errors);
         Assert.Equal(0, _importRepository.SaveCount);
     }
 }

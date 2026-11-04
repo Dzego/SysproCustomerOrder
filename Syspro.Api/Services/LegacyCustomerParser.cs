@@ -19,6 +19,20 @@ public class LegacyCustomerParser
         }
 
         var legacyCustomerId = line.Substring(0, 10).Trim();
+
+        // The column is varchar, where unsupported characters become '?'. Different IDs
+        // could then match the same row, and update the wrong customer.
+        if (legacyCustomerId.Length == 0)
+        {
+            throw new LegacyCustomerParseException("Invalid LegacyCustomerId: the value is blank.");
+        }
+
+        if (!legacyCustomerId.All(IsPrintableAscii))
+        {
+            throw new LegacyCustomerParseException(
+                "Invalid LegacyCustomerId: only printable ASCII characters are allowed.");
+        }
+
         var name = line.Substring(10, 30).Trim();
         var email = line.Substring(40, 30).Trim();
         var signupDateText = line.Substring(70, 8).Trim();
@@ -49,5 +63,10 @@ public class LegacyCustomerParser
             SignupDate = signupDate,
             Tier = tier
         };
+    }
+
+    private static bool IsPrintableAscii(char character)
+    {
+        return character is >= ' ' and <= '~';
     }
 }

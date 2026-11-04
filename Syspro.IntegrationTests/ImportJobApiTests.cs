@@ -382,7 +382,8 @@ public sealed class ImportJobApiTests(SqlServerFixture fixture) : SqlServerTestB
 
         Assert.Equal(ImportJobStatus.Pending, interrupted.Status);
         Assert.Null(interrupted.CompletedAt);
-        Assert.Equal(0, interrupted.AttemptCount);
+        Assert.Equal(1, interrupted.AttemptCount);
+        Assert.Equal(0, interrupted.ConsecutiveFailureCount);
         Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
 
         using var restarted = new ApiFactory(ConnectionString, runImportWorker: true);

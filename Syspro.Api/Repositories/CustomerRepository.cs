@@ -13,18 +13,25 @@ public class CustomerRepository : ICustomerRepository
         _dbContext = dbContext;
     }
 
-    public Task<Customer?> GetByLegacyCustomerIdAsync(
-        string legacyCustomerId,
+    public async Task<Dictionary<string, Customer>> GetByLegacyCustomerIdsAsync(
+        IReadOnlyCollection<string> legacyCustomerIds,
         CancellationToken cancellationToken)
     {
-        return _dbContext.Customers
-            .FirstOrDefaultAsync(
-                customer => customer.LegacyCustomerId == legacyCustomerId,
+        if (legacyCustomerIds.Count == 0)
+        {
+            return new Dictionary<string, Customer>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        return await _dbContext.Customers
+            .Where(customer => legacyCustomerIds.Contains(customer.LegacyCustomerId))
+            .ToDictionaryAsync(
+                customer => customer.LegacyCustomerId,
+                StringComparer.OrdinalIgnoreCase,
                 cancellationToken);
     }
 
-    public async Task AddAsync(Customer customer, CancellationToken cancellationToken)
+    public void Add(Customer customer)
     {
-        await _dbContext.Customers.AddAsync(customer, cancellationToken);
+        _dbContext.Customers.Add(customer);
     }
 }

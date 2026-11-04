@@ -27,6 +27,9 @@ builder.Services.AddOptions<CustomerImportOptions>()
     .Validate(
         options => options.HasValidMaxInputBytes,
         "CustomerImport:MaxInputBytes must be above zero and at most 1 GiB.")
+    .Validate(
+        options => options.HasValidBatchSize,
+        "CustomerImport:BatchSize must be above zero and at most 10,000.")
     .ValidateOnStart();
 builder.Services.AddOptions<CustomerImportWorkerOptions>()
     .Bind(builder.Configuration.GetSection(CustomerImportWorkerOptions.SectionName))

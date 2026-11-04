@@ -4,6 +4,7 @@ using Syspro.Api.Data;
 using Syspro.Api.Models;
 using Syspro.Api.Repositories;
 using Syspro.Api.Services;
+using Syspro.Tests.TestSupport;
 using Xunit;
 
 namespace Syspro.Tests.Services;
@@ -26,7 +27,8 @@ public sealed class CustomerImportServiceTests : IDisposable
         _service = new CustomerImportService(
             new LegacyCustomerParser(),
             new CustomerRepository(_dbContext),
-            new ImportRepository(_dbContext));
+            new InMemoryImportRepository(_dbContext),
+            Microsoft.Extensions.Options.Options.Create(new CustomerImportOptions()));
     }
 
     public void Dispose()
@@ -63,8 +65,8 @@ public sealed class CustomerImportServiceTests : IDisposable
         _dbContext.ImportLogs.Add(job);
         await _dbContext.SaveChangesAsync();
 
-        // The worker reads the input without tracking it, so match that here.
-        _dbContext.Entry(job.Input).State = EntityState.Detached;
+        // A claimed job and its input are not tracked, so match that here.
+        _dbContext.ChangeTracker.Clear();
         job.Input = null;
 
         return job;
@@ -411,7 +413,8 @@ public sealed class CustomerImportServiceTests : IDisposable
         var service = new CustomerImportService(
             new LegacyCustomerParser(),
             new FailingCustomerRepository(),
-            new ImportRepository(_dbContext));
+            new InMemoryImportRepository(_dbContext),
+            Microsoft.Extensions.Options.Options.Create(new CustomerImportOptions()));
 
         var job = await AddClaimedJobAsync();
 
@@ -423,14 +426,14 @@ public sealed class CustomerImportServiceTests : IDisposable
 
     private sealed class FailingCustomerRepository : ICustomerRepository
     {
-        public Task<Customer?> GetByLegacyCustomerIdAsync(
-            string legacyCustomerId,
+        public Task<Dictionary<string, Customer>> GetByLegacyCustomerIdsAsync(
+            IReadOnlyCollection<string> legacyCustomerIds,
             CancellationToken cancellationToken)
         {
             throw new InvalidOperationException("Database unavailable.");
         }
 
-        public Task AddAsync(Customer customer, CancellationToken cancellationToken)
+        public void Add(Customer customer)
         {
             throw new InvalidOperationException("Not expected.");
         }

@@ -26,6 +26,60 @@ public class ImportRepository : IImportRepository
         return _dbContext.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task ExecuteInTransactionAsync(
+        Func<CancellationToken, Task> work,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+            await work(cancellationToken);
+
+            // All the work is done, so shutdown should not abandon the commit. Cancelling
+            // here would only make its outcome uncertain.
+            await transaction.CommitAsync(CancellationToken.None);
+        }
+        finally
+        {
+            _dbContext.ChangeTracker.Clear();
+        }
+    }
+
+    public void AddErrors(IEnumerable<ImportError> errors)
+    {
+        _dbContext.ImportErrors.AddRange(errors);
+    }
+
+    public async Task<bool> ApplyBatchProgressAsync(
+        int id,
+        int expectedProcessedCount,
+        ImportBatchProgress progress,
+        bool completeJob,
+        CancellationToken cancellationToken)
+    {
+        var status = completeJob ? ImportJobStatus.Completed : ImportJobStatus.Processing;
+        DateTime? completedAt = completeJob ? DateTime.UtcNow : null;
+
+        var updated = await _dbContext.ImportLogs
+            .Where(job =>
+                job.Id == id &&
+                job.Status == ImportJobStatus.Processing &&
+                job.ProcessedCount == expectedProcessedCount)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(job => job.ProcessedCount, job => job.ProcessedCount + progress.Processed)
+                    .SetProperty(job => job.CreatedCount, job => job.CreatedCount + progress.Created)
+                    .SetProperty(job => job.UpdatedCount, job => job.UpdatedCount + progress.Updated)
+                    .SetProperty(job => job.FailedCount, job => job.FailedCount + progress.Failed)
+                    .SetProperty(job => job.ConsecutiveFailureCount, 0)
+                    .SetProperty(job => job.Status, status)
+                    .SetProperty(job => job.CompletedAt, completedAt),
+                cancellationToken);
+
+        return updated == 1;
+    }
+
     public Task<ImportLog?> GetJobAsync(int id, CancellationToken cancellationToken)
     {
         return _dbContext.ImportLogs
@@ -139,7 +193,8 @@ public class ImportRepository : IImportRepository
                 setters => setters
                     .SetProperty(job => job.Status, ImportJobStatus.Processing)
                     .SetProperty(job => job.StartedAt, now)
-                    .SetProperty(job => job.AttemptCount, job => job.AttemptCount + 1),
+                    .SetProperty(job => job.AttemptCount, job => job.AttemptCount + 1)
+                    .SetProperty(job => job.ConsecutiveFailureCount, job => job.ConsecutiveFailureCount + 1),
                 cancellationToken);
 
         if (claimed == 0)
@@ -148,6 +203,7 @@ public class ImportRepository : IImportRepository
         }
 
         return await _dbContext.ImportLogs
+            .AsNoTracking()
             .SingleAsync(job => job.Id == candidateId, cancellationToken);
     }
 
@@ -159,7 +215,20 @@ public class ImportRepository : IImportRepository
                 setters => setters
                     .SetProperty(job => job.Status, ImportJobStatus.Pending)
                     .SetProperty(job => job.StartedAt, (DateTime?)null)
-                    .SetProperty(job => job.AttemptCount, job => job.AttemptCount - 1),
+                    .SetProperty(
+                        job => job.ConsecutiveFailureCount,
+                        job => job.ConsecutiveFailureCount > 0 ? job.ConsecutiveFailureCount - 1 : 0),
+                cancellationToken);
+    }
+
+    public Task RequeueJobAsync(int id, CancellationToken cancellationToken)
+    {
+        return _dbContext.ImportLogs
+            .Where(job => job.Id == id && job.Status == ImportJobStatus.Processing)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(job => job.Status, ImportJobStatus.Pending)
+                    .SetProperty(job => job.StartedAt, (DateTime?)null),
                 cancellationToken);
     }
 
@@ -194,7 +263,7 @@ public class ImportRepository : IImportRepository
 
         // Runs first so that exhausted jobs are not requeued by the next statement.
         var failed = await _dbContext.ImportLogs
-            .Where(job => job.Status == ImportJobStatus.Processing && job.AttemptCount >= maxAttempts)
+            .Where(job => job.Status == ImportJobStatus.Processing && job.ConsecutiveFailureCount >= maxAttempts)
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(job => job.Status, ImportJobStatus.Failed)

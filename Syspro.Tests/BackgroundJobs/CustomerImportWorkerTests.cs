@@ -249,6 +249,19 @@ public sealed class CustomerImportWorkerTests : IAsyncDisposable
     [InlineData(0, false)]
     [InlineData(-1, false)]
     [InlineData(1, true)]
+    [InlineData(CustomerImportOptions.MaxAllowedBatchSize, true)]
+    [InlineData(CustomerImportOptions.MaxAllowedBatchSize + 1, false)]
+    public void BatchSize_IsBounded(int batchSize, bool expected)
+    {
+        var options = new CustomerImportOptions { BatchSize = batchSize };
+
+        Assert.Equal(expected, options.HasValidBatchSize);
+    }
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(-1, false)]
+    [InlineData(1, true)]
     [InlineData(CustomerImportOptions.MaxAllowedInputBytes, true)]
     [InlineData(CustomerImportOptions.MaxAllowedInputBytes + 1, false)]
     public void MaxInputBytes_IsBounded(int maxInputBytes, bool expected)

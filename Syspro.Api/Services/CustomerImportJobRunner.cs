@@ -2,25 +2,31 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Syspro.Api.BackgroundJobs;
 using Syspro.Api.ExceptionHandling;
+using Syspro.Api.Models;
 using Syspro.Api.Repositories;
 
 namespace Syspro.Api.Services;
 
-// Failure reasons are returned to clients, so they are fixed strings chosen here
-// and never exception messages. The exception itself goes only to the logs.
+// Failure reasons are returned to clients, so they are fixed strings chosen here, plus
+// line numbers, and never exception messages. The exception itself goes only to the logs.
 public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
 {
     private const string InputMissingReason =
-        "The import job has no stored input, so it could not run. No customers were changed. Submit a new import.";
+        "The import job has no stored input, so it could not run. Submit a new import.";
 
     private const string DatabaseFailureReason =
-        "The import could not be saved to the database. No customers were changed.";
+        "The import could not be saved to the database.";
 
     private const string UnexpectedFailureReason =
-        "The import failed unexpectedly. No customers were changed.";
+        "The import failed unexpectedly.";
 
+    private const string RetriesExhaustedReason =
+        "The import kept failing on a temporary database problem and will not be retried.";
+
+    // Recovery updates jobs in bulk, so this cannot state each job's own progress.
     private const string AttemptsExhaustedReason =
-        "The import was interrupted too many times and will not be retried. No customers were changed.";
+        "The import was interrupted too many times and will not be retried. " +
+        "Lines counted in this job's results were committed and remain applied.";
 
     private static readonly TimeSpan ReleaseTimeout = TimeSpan.FromSeconds(5);
 
@@ -41,10 +47,9 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
         _logger = logger;
     }
 
-    // A Processing job that nothing is running has not changed any customers,
-    // because Completed commits in the same transaction as the customers. Running
-    // it again is therefore safe. The attempt limit stops a job that crashes the
-    // process from doing so forever.
+    // A Processing job that nothing is running can safely run again, because it resumes
+    // after its checkpoint. A batch that was cut short committed nothing. The failure limit
+    // stops a job that crashes the process from doing so forever.
     public async Task RecoverInterruptedJobsAsync(CancellationToken stoppingToken)
     {
         var recovery = await _importRepository.RecoverInterruptedJobsAsync(
@@ -74,9 +79,10 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
         var jobId = job.Id;
 
         _logger.LogInformation(
-            "Started import job {JobId}, attempt {AttemptCount}",
+            "Started import job {JobId}, attempt {AttemptCount}, after {CommittedLines} committed lines",
             jobId,
-            job.AttemptCount);
+            job.AttemptCount,
+            job.ProcessedCount);
 
         try
         {
@@ -90,7 +96,10 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
                     "Import job {JobId} has no stored input and was marked as failed. It was probably accepted before input snapshots were introduced",
                     jobId);
 
-                await _importRepository.MarkJobFailedAsync(jobId, InputMissingReason, stoppingToken);
+                await _importRepository.MarkJobFailedAsync(
+                    jobId,
+                    InputMissingReason + DescribeProgress(job.ProcessedCount),
+                    stoppingToken);
 
                 return true;
             }
@@ -109,19 +118,70 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
         {
             await HandleShutdownAsync(jobId, exception);
         }
+        catch (ImportJobStateChangedException exception)
+        {
+            _logger.LogWarning(exception, "Import job {JobId} stopped because it changed elsewhere", jobId);
+        }
         catch (Exception exception)
         {
             _logger.LogError(exception, "Import job {JobId} failed", jobId);
 
-            await _importRepository.MarkJobFailedAsync(jobId, GetFailureReason(exception), stoppingToken);
+            await HandleFailureAsync(jobId, exception, stoppingToken);
         }
 
         return true;
     }
 
-    // Requeues whatever the exception was: nothing was committed, and if this is a
-    // genuine fault the next run will report it as a failure. Failing to requeue is
-    // also safe, because the job stays Processing and is recovered at next startup.
+    // Reads the job back rather than trusting what this execution last saw. A lost
+    // connection can hide a COMMIT that succeeded, so the database decides what happened.
+    private async Task HandleFailureAsync(int jobId, Exception exception, CancellationToken stoppingToken)
+    {
+        var job = await _importRepository.GetJobAsync(jobId, stoppingToken);
+
+        if (job is null || job.Status != ImportJobStatus.Processing)
+        {
+            _logger.LogInformation(
+                "Import job {JobId} is already {Status}, so its last commit succeeded despite the error",
+                jobId,
+                job?.Status);
+
+            return;
+        }
+
+        var isTransient = TransientDatabaseFailureClassifier.IsTransient(exception);
+
+        if (isTransient && job.ConsecutiveFailureCount < _options.MaxAttempts)
+        {
+            _logger.LogWarning(
+                "Import job {JobId} will resume after {CommittedLines} committed lines. Failures in a row: {ConsecutiveFailureCount}",
+                jobId,
+                job.ProcessedCount,
+                job.ConsecutiveFailureCount);
+
+            await _importRepository.RequeueJobAsync(jobId, stoppingToken);
+
+            return;
+        }
+
+        var reason = isTransient ? RetriesExhaustedReason : GetFailureReason(exception);
+
+        await _importRepository.MarkJobFailedAsync(
+            jobId,
+            reason + DescribeProgress(job.ProcessedCount),
+            stoppingToken);
+    }
+
+    private static string DescribeProgress(int committedLines)
+    {
+        return committedLines == 0
+            ? " No customers were changed."
+            : $" Lines 1 to {committedLines} were committed and remain applied. " +
+              $"Processing stopped at line {committedLines + 1}.";
+    }
+
+    // Requeues whatever the exception was: the batch in progress was rolled back, and if
+    // this is a genuine fault the next run will report it as a failure. Failing to requeue
+    // is also safe, because the job stays Processing and is recovered at next startup.
     private async Task HandleShutdownAsync(int jobId, Exception exception)
     {
         if (CancellationExceptionClassifier.IsCancellation(exception))

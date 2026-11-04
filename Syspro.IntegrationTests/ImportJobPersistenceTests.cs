@@ -42,7 +42,8 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
             new CustomerImportService(
                 new LegacyCustomerParser(),
                 new CustomerRepository(dbContext),
-                importRepository),
+                importRepository,
+            TestData.ImportOptions()),
             Options.Create(new CustomerImportWorkerOptions { MaxAttempts = MaxAttempts }),
             NullLogger<CustomerImportJobRunner>.Instance);
     }
@@ -79,6 +80,7 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
             CreatedAt = now,
             StartedAt = now,
             AttemptCount = attemptCount,
+            ConsecutiveFailureCount = attemptCount,
             Input = new ImportJobInput { Content = _input }
         };
 
@@ -302,7 +304,8 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
         Assert.Equal(ImportJobStatus.Pending, job.Status);
         Assert.Null(job.StartedAt);
         Assert.Null(job.CompletedAt);
-        Assert.Equal(0, job.AttemptCount);
+        Assert.Equal(1, job.AttemptCount);
+        Assert.Equal(0, job.ConsecutiveFailureCount);
         Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
         Assert.True(await HasStoredInputAsync(pending.Id));
 
@@ -368,14 +371,15 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
         var service = new CustomerImportService(
             new LegacyCustomerParser(),
             new CustomerRepository(dbContext),
-            importRepository);
+            importRepository,
+            TestData.ImportOptions());
 
         var action = () => service.ImportAsync(
             job,
             new MemoryStream(_input),
             CancellationToken.None);
 
-        await Assert.ThrowsAsync<DbUpdateConcurrencyException>(action);
+        await Assert.ThrowsAsync<ImportJobStateChangedException>(action);
 
         Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
         Assert.Equal("Taken over.", (await GetJobAsync(job.Id)).FailureReason);
@@ -411,7 +415,8 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
         return new CustomerImportService(
             new LegacyCustomerParser(),
             new CustomerRepository(dbContext),
-            new ImportRepository(dbContext));
+            new ImportRepository(dbContext),
+            TestData.ImportOptions());
     }
 
     private static async Task<ImportLog> ClaimAsync(AppDbContext dbContext)
@@ -542,7 +547,7 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
 
         await RecoverAsync();
 
-        await Assert.ThrowsAsync<DbUpdateConcurrencyException>(
+        await Assert.ThrowsAsync<ImportJobStateChangedException>(
             () => CreateImportService(workerA).ImportAsync(job, new MemoryStream(_input), CancellationToken.None));
 
         Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
@@ -577,7 +582,7 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
 
         await CreateImportService(workerA).ImportAsync(jobForA, new MemoryStream(_input), CancellationToken.None);
 
-        await Assert.ThrowsAnyAsync<DbUpdateException>(
+        await Assert.ThrowsAsync<ImportJobStateChangedException>(
             () => CreateImportService(workerB).ImportAsync(jobForB, new MemoryStream(_input), CancellationToken.None));
 
         var stored = await GetJobAsync(pending.Id);
@@ -601,11 +606,11 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
 
         var job = await ClaimAsync(workerA);
 
-        Assert.Equal(MaxAttempts, job.AttemptCount);
+        Assert.Equal(MaxAttempts, job.ConsecutiveFailureCount);
 
         await RecoverAsync();
 
-        await Assert.ThrowsAsync<DbUpdateConcurrencyException>(
+        await Assert.ThrowsAsync<ImportJobStateChangedException>(
             () => CreateImportService(workerA).ImportAsync(job, new MemoryStream(_input), CancellationToken.None));
 
         var stored = await GetJobAsync(interrupted.Id);

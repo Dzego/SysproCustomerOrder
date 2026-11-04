@@ -2,7 +2,9 @@ using System.Text;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Syspro.Api.DTOs;
+using Microsoft.Extensions.Options;
 using Syspro.Api.Models;
+using Syspro.Api.Services;
 
 namespace Syspro.IntegrationTests.Infrastructure;
 
@@ -86,6 +88,15 @@ public static class TestData
                email.PadRight(30) +
                signupDate.PadRight(8) +
                tier.PadRight(2);
+    }
+
+    public static IOptions<CustomerImportOptions> ImportOptions(int? batchSize = null)
+    {
+        var options = new CustomerImportOptions();
+
+        options.BatchSize = batchSize ?? options.BatchSize;
+
+        return Options.Create(options);
     }
 
     // The bytes File.WriteAllLines would produce for these lines.

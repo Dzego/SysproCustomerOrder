@@ -48,9 +48,43 @@ public class CustomerImportJobRunnerTests
             throw new NotSupportedException();
         }
 
-        public Task<ImportLog?> GetJobAsync(int id, CancellationToken cancellationToken)
+        public Task ExecuteInTransactionAsync(
+            Func<CancellationToken, Task> work,
+            CancellationToken cancellationToken)
         {
             throw new NotSupportedException();
+        }
+
+        public void AddErrors(IEnumerable<ImportError> errors)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<bool> ApplyBatchProgressAsync(
+            int id,
+            int expectedProcessedCount,
+            ImportBatchProgress progress,
+            bool completeJob,
+            CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
+        public ImportLog? PersistedJob { get; set; }
+
+        public int? RequeuedJobId { get; private set; }
+
+        public Task RequeueJobAsync(int id, CancellationToken cancellationToken)
+        {
+            RequeuedJobId = id;
+
+            return Task.CompletedTask;
+        }
+
+        // What is stored can differ from what this execution last saw.
+        public Task<ImportLog?> GetJobAsync(int id, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(PersistedJob ?? NextJob);
         }
 
         public Task<Stream?> OpenJobInputAsync(int id, CancellationToken cancellationToken)
@@ -180,7 +214,7 @@ public class CustomerImportJobRunnerTests
 
         Assert.Null(importService.ReceivedToken);
         Assert.Equal(
-            (42, "The import job has no stored input, so it could not run. No customers were changed. Submit a new import."),
+            (42, "The import job has no stored input, so it could not run. Submit a new import. No customers were changed."),
             _repository.FailedJob);
         Assert.Single(_logger.Entries, e => e.Level == LogLevel.Error);
     }
@@ -194,6 +228,50 @@ public class CustomerImportJobRunnerTests
         // Not shutting down, so nothing explains this away. It is a server-side timeout.
         { new OperationCanceledException(SecretText), "The import failed unexpectedly. No customers were changed." }
     };
+
+    // A Failed job can have earlier batches applied, and its reason must say so.
+    [Fact]
+    public async Task RunNextJob_WhenImportFailsAfterCommittedBatches_ReportsWhatWasApplied()
+    {
+        var runner = CreateRunnerThrowing(new InvalidOperationException(SecretText));
+
+        _repository.PersistedJob = CreateClaimedJob();
+        _repository.PersistedJob.ProcessedCount = 2000;
+        _repository.PersistedJob.CreatedCount = 2000;
+
+        await runner.RunNextJobAsync(CancellationToken.None);
+
+        Assert.Equal(
+            (42, "The import failed unexpectedly. Lines 1 to 2000 were committed and remain applied. Processing stopped at line 2001."),
+            _repository.FailedJob);
+    }
+
+    // A lost connection can hide a commit that succeeded, so the database decides.
+    [Fact]
+    public async Task RunNextJob_WhenFailureFollowsACommitThatCompletedTheJob_LeavesItCompleted()
+    {
+        var runner = CreateRunnerThrowing(new InvalidOperationException(SecretText));
+
+        _repository.PersistedJob = CreateClaimedJob();
+        _repository.PersistedJob.Status = ImportJobStatus.Completed;
+
+        Assert.True(await runner.RunNextJobAsync(CancellationToken.None));
+
+        Assert.Null(_repository.FailedJob);
+        Assert.Null(_repository.RequeuedJobId);
+    }
+
+    [Fact]
+    public async Task RunNextJob_WhenAnotherExecutionChangedTheJob_LeavesItAlone()
+    {
+        var runner = CreateRunnerThrowing(new ImportJobStateChangedException(42));
+
+        Assert.True(await runner.RunNextJobAsync(CancellationToken.None));
+
+        Assert.Null(_repository.FailedJob);
+        Assert.Null(_repository.RequeuedJobId);
+        Assert.Null(_repository.ReleasedJobId);
+    }
 
     [Theory]
     [MemberData(nameof(FailuresAndReasons))]

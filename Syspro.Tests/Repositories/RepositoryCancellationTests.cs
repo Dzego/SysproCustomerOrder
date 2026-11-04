@@ -21,15 +21,15 @@ public class RepositoryCancellationTests
     }
 
     [Fact]
-    public async Task GetByLegacyCustomerIdAsync_WhenCancelled_ThrowsOperationCanceledException()
+    public async Task GetByLegacyCustomerIdsAsync_WhenCancelled_ThrowsOperationCanceledException()
     {
         // Arrange
         await using var dbContext = CreateDbContext();
         var repository = new CustomerRepository(dbContext);
 
         // Act
-        var action = () => repository.GetByLegacyCustomerIdAsync(
-            "0000012345",
+        var action = () => repository.GetByLegacyCustomerIdsAsync(
+            ["0000012345"],
             new CancellationToken(canceled: true));
 
         // Assert
