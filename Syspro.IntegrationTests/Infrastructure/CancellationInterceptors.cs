@@ -80,3 +80,44 @@ public sealed class BeforeFirstUpdateInterceptor(Func<Task> action) : DbCommandI
         return await base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
     }
 }
+
+public sealed class SaveAndCommitCounter : ISaveChangesInterceptor, IDbTransactionInterceptor
+{
+    public int SaveCount { get; private set; }
+
+    public int CommitCount { get; private set; }
+
+    public ValueTask<InterceptionResult<int>> SavingChangesAsync(
+        DbContextEventData eventData,
+        InterceptionResult<int> result,
+        CancellationToken cancellationToken = default)
+    {
+        SaveCount++;
+
+        return ValueTask.FromResult(result);
+    }
+
+    public Task TransactionCommittedAsync(
+        DbTransaction transaction,
+        TransactionEndEventData eventData,
+        CancellationToken cancellationToken = default)
+    {
+        CommitCount++;
+
+        return Task.CompletedTask;
+    }
+}
+
+public sealed class FailOnCommitInterceptor : DbTransactionInterceptor
+{
+    public sealed class CommitFailedException : Exception;
+
+    public override ValueTask<InterceptionResult> TransactionCommittingAsync(
+        DbTransaction transaction,
+        TransactionEventData eventData,
+        InterceptionResult result,
+        CancellationToken cancellationToken = default)
+    {
+        throw new CommitFailedException();
+    }
+}

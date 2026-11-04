@@ -6,6 +6,8 @@ public interface IImportRepository
 {
     Task AddLogAsync(ImportLog importLog, CancellationToken cancellationToken);
 
+    // Also saves customer changes made through ICustomerRepository, which shares this
+    // repository's scoped context. This is what makes an import a single transaction.
     Task SaveChangesAsync(CancellationToken cancellationToken);
 
     Task<ImportLog?> GetJobAsync(int id, CancellationToken cancellationToken);

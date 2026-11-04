@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using System.Net.Http.Json;
+using Syspro.Api.DTOs;
 using Syspro.Api.Models;
 using Syspro.Api.Validators;
 using Syspro.IntegrationTests.Infrastructure;
@@ -156,6 +158,118 @@ public sealed class MigrationTests(SqlServerFixture fixture) : SqlServerTestBase
         Assert.Equal(ImportJobStatus.Failed, logs[1].Status);
         Assert.Equal(started, logs[1].CompletedAt);
         Assert.NotNull(logs[1].FailureReason);
+    }
+
+    // Everything a database from before job tracking would hold, inserted using only
+    // the columns that existed then.
+    private async Task SeedHistoricalDataAsync()
+    {
+        var started = new DateTime(2026, 1, 1, 10, 0, 0);
+        var completed = started.AddMinutes(1);
+        var signup = new DateTime(2021, 3, 15);
+
+        await ExecuteSqlAsync(
+            $"""
+             INSERT INTO [ImportLogs]
+                 ([StartedAt], [CompletedAt], [ProcessedCount], [CreatedCount], [UpdatedCount], [FailedCount])
+             VALUES ({started}, {completed}, 7, 5, 0, 2);
+             """);
+
+        await ExecuteSqlAsync(
+            $"""
+             INSERT INTO [ImportErrors] ([ImportLogId], [LineNumber], [RawData], [Reason])
+             SELECT [Id], 6, 'raw row', 'Invalid signup date: 20241340' FROM [ImportLogs];
+             """);
+
+        await ExecuteSqlAsync(
+            $"""
+             INSERT INTO [Customers] ([LegacyCustomerId], [Name], [Email], [Tier], [SignupDate])
+             VALUES ('0000012345', 'Historical Name', 'old@example.com', 'A', {signup});
+             """);
+    }
+
+    private async Task AssertHistoricalDataIsIntactAsync()
+    {
+        var log = await QueryAsync(context => context.ImportLogs.Include(x => x.Errors).SingleAsync());
+
+        Assert.Equal(ImportJobStatus.Completed, log.Status);
+        Assert.Equal(7, log.ProcessedCount);
+        Assert.Equal(5, log.CreatedCount);
+        Assert.Equal(2, log.FailedCount);
+        Assert.Equal(new DateTime(2026, 1, 1, 10, 0, 0), log.StartedAt);
+        Assert.Equal(new DateTime(2026, 1, 1, 10, 1, 0), log.CompletedAt);
+
+        var error = Assert.Single(log.Errors);
+
+        Assert.Equal(6, error.LineNumber);
+        Assert.Equal("raw row", error.RawData);
+        Assert.Equal("Invalid signup date: 20241340", error.Reason);
+
+        var customer = await QueryAsync(context => context.Customers.SingleAsync());
+
+        Assert.Equal("Historical Name", customer.Name);
+    }
+
+    [SqlServerFact]
+    public async Task JobTrackingMigration_PreservesHistoricalLogsErrorsAndCustomers()
+    {
+        await MigrateToAsync(InitialCreateMigration);
+        await SeedHistoricalDataAsync();
+
+        await MigrateToAsync(null);
+
+        await AssertHistoricalDataIsIntactAsync();
+    }
+
+    [SqlServerFact]
+    public async Task JobTrackingMigration_RoundTripsHistoricalData()
+    {
+        await MigrateToAsync(InitialCreateMigration);
+        await SeedHistoricalDataAsync();
+
+        await MigrateToAsync(null);
+        await MigrateToAsync(InitialCreateMigration);
+        await MigrateToAsync(null);
+
+        await AssertHistoricalDataIsIntactAsync();
+    }
+
+    // The real API on an upgraded database: history is readable as finished jobs, the
+    // worker never runs it again, and new imports work alongside it.
+    [SqlServerFact]
+    public async Task UpgradedDatabase_ServesHistoryAndRunsNewJobsWithoutReprocessingOldOnes()
+    {
+        await MigrateToAsync(InitialCreateMigration);
+        await SeedHistoricalDataAsync();
+        await MigrateToAsync(null);
+
+        var historical = await QueryAsync(context => context.ImportLogs.SingleAsync());
+
+        using var factory = new ApiFactory(ConnectionString, runImportWorker: true);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync("/api/import/customers", content: null);
+
+        var job = await ImportJobClient.WaitForTerminalStatusAsync(client, response.Headers.Location!);
+
+        Assert.Equal("Completed", job.Status);
+        Assert.NotEqual(historical.Id, job.Id);
+
+        // 0000012345 is in the sample file, so the historical customer is updated.
+        Assert.Equal(4, job.Created);
+        Assert.Equal(1, job.Updated);
+
+        var served = await client.GetFromJsonAsync<ImportJobResponse>($"/api/import/jobs/{historical.Id}");
+
+        Assert.NotNull(served);
+        Assert.Equal("Completed", served.Status);
+        Assert.Equal(7, served.Processed);
+        Assert.Equal(5, served.Created);
+
+        var unchanged = await QueryAsync(context => context.ImportLogs.SingleAsync(x => x.Id == historical.Id));
+
+        Assert.Equal(1, unchanged.AttemptCount);
+        Assert.Equal(historical.CompletedAt, unchanged.CompletedAt);
     }
 
     [SqlServerFact]

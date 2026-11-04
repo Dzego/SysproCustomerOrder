@@ -393,7 +393,7 @@ Pending -> Processing -> Completed or Failed
 Processing -> Pending, when interrupted work is queued to run again
 ```
 
-The job is stored in `ImportLogs`, where the database enforces valid status and timestamp combinations. The file is read when the job runs, not when it is accepted.
+The job is stored in `ImportLogs`, where the database enforces valid status and timestamp combinations. The file is read when the job runs, not when it is accepted (see "Job Input Limitation").
 
 ## Restarts and Interruptions
 
@@ -421,11 +421,37 @@ The customers, row errors and `Completed` status are committed in one transactio
 
 `PollInterval` must be above zero and at most five minutes. A new job can wait up to one interval before it starts.
 
-## Deployment Limitation: Single Worker Only
+## Deployment Restriction: One Enabled Worker
 
-**Run the worker on only one instance.** With more than one API instance, set `CustomerImportWorker:Enabled` to `false` on all but one. The disabled instances still accept jobs and report their status.
+**Exactly one running instance may have `CustomerImportWorker:Enabled` set to `true`. Nothing enforces this, so it is a deployment responsibility.** Instances with the worker disabled still accept jobs and report their status.
 
-Claiming a job is atomic, so two workers cannot both claim the same `Pending` job. Recovery is not safe with several workers, however. It assumes that any `Processing` job has been abandoned, so a worker starting up would requeue a job that another worker is still running. There are no leases or heartbeats to tell the two apart. This also applies during a rolling deployment where the old and new instances overlap.
+| Deployment | What to do |
+| --- | --- |
+| One API instance | No action needed, unless deployments overlap |
+| Several API instances, autoscaling or Kubernetes replicas | Set `Enabled` to `false` everywhere except one fixed instance |
+| Rolling or blue-green deployment | Old and new instances must not both have the worker enabled. Stop the old worker before starting the new one |
+
+Claiming is atomic, so two workers cannot claim the same `Pending` job. Recovery is the unsafe part: at startup it treats every `Processing` job as abandoned, and has no leases or heartbeats to tell an abandoned job from one that another worker is running. If a second worker starts:
+
+- It requeues the running job, so the first worker's work is rejected at commit and wasted.
+- Both workers can run the same job at once. Only one commits, so customers are not duplicated, but the attempt count no longer reflects what happened.
+- It can permanently mark a healthy running job as `Failed` once the attempt limit is reached.
+
+A concurrency check on `Status` prevents a second commit in the cases tested, but it is a safeguard and does not make several workers supported.
+
+## Job Input Limitation
+
+A job does not store a copy of its input. The legacy file is only checked for existence when the job is accepted, and is read from the local filesystem when the job runs. As a result:
+
+| If the file... | Then... |
+| --- | --- |
+| Is replaced before the job runs | The job imports the new content, not what was there when it was accepted |
+| Changes before a retry | The retry uses different content from the interrupted attempt |
+| Is still being written when the job runs | Missing or cut-off rows can leave the job `Completed` with partial data |
+| Is removed before the job runs | The job becomes `Failed`, and restoring the file does not revive it. Send a new request |
+| Exists only on the instance that accepted the job | The job fails or uses a different file on the worker's instance |
+
+Replace the file only when no job is `Pending` or `Processing`, and move a fully written file into place instead of copying over the existing one.
 
 ---
 
@@ -502,6 +528,8 @@ The service is responsible for:
 - Coordinating the import workflow
 
 The repositories are responsible for persistence operations.
+
+`IImportRepository.SaveChangesAsync` is the only save in an import. Both repositories share one scoped `AppDbContext`, so that one call commits the customers, row errors and job status in a single transaction.
 
 A generic `IRepository<T>` abstraction was deliberately avoided. The repositories expose focused operations required by the application rather than wrapping every EF Core CRUD operation.
 

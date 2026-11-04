@@ -46,8 +46,6 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
 
         public int LookupCount { get; private set; }
 
-        public int SaveCount { get; private set; }
-
         public Task<Customer?> GetByLegacyCustomerIdAsync(
             string legacyCustomerId,
             CancellationToken cancellationToken)
@@ -62,14 +60,6 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
         public Task AddAsync(Customer customer, CancellationToken cancellationToken)
         {
             ReceivedTokens.Add(cancellationToken);
-
-            return Task.CompletedTask;
-        }
-
-        public Task SaveChangesAsync(CancellationToken cancellationToken)
-        {
-            ReceivedTokens.Add(cancellationToken);
-            SaveCount++;
 
             return Task.CompletedTask;
         }
@@ -135,7 +125,7 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
         await _service.ImportAsync(_job, _filePath, cancellationSource.Token);
 
         // Assert
-        Assert.Equal(3, _customerRepository.ReceivedTokens.Count);
+        Assert.Equal(2, _customerRepository.ReceivedTokens.Count);
         Assert.Single(_importRepository.ReceivedTokens);
 
         Assert.All(
@@ -156,7 +146,6 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
 
         // Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);
-        Assert.Equal(0, _customerRepository.SaveCount);
         Assert.Equal(0, _importRepository.SaveCount);
     }
 
@@ -175,7 +164,6 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
         // Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);
         Assert.Equal(1, _customerRepository.LookupCount);
-        Assert.Equal(0, _customerRepository.SaveCount);
         Assert.Equal(0, _importRepository.SaveCount);
     }
 

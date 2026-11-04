@@ -9,6 +9,4 @@ public interface ICustomerRepository
         CancellationToken cancellationToken);
 
     Task AddAsync(Customer customer, CancellationToken cancellationToken);
-
-    Task SaveChangesAsync(CancellationToken cancellationToken);
 }

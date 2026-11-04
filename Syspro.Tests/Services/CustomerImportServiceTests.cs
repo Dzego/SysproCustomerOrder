@@ -371,12 +371,5 @@ public sealed class CustomerImportServiceTests : IDisposable
         {
             throw new InvalidOperationException("Not expected.");
         }
-
-        // Succeeds so that a swallowed lookup failure would complete the import
-        // and fail the test, rather than this method supplying the exception.
-        public Task SaveChangesAsync(CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
     }
 }

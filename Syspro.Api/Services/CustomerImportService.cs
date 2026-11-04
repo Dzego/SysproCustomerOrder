@@ -95,9 +95,10 @@ public class CustomerImportService : ICustomerImportService
         importLog.Status = ImportJobStatus.Completed;
         importLog.CompletedAt = DateTime.UtcNow;
 
-        await _customerRepository.SaveChangesAsync(cancellationToken);
+        // The only save in the import. Both repositories share one scoped context, so
+        // this commits the customers, row errors and job status in one transaction.
         await _importRepository.SaveChangesAsync(cancellationToken);
-        
+
         return new ImportResult
         {
             Processed = importLog.ProcessedCount,

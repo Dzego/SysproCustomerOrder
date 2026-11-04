@@ -27,9 +27,4 @@ public class CustomerRepository : ICustomerRepository
     {
         await _dbContext.Customers.AddAsync(customer, cancellationToken);
     }
-
-    public Task SaveChangesAsync(CancellationToken cancellationToken)
-    {
-        return _dbContext.SaveChangesAsync(cancellationToken);
-    }
 }

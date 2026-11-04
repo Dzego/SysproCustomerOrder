@@ -419,6 +419,307 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
         Assert.Null(job.FailureReason);
     }
 
+    // ---------- Atomic completion ----------
+
+    private CustomerImportService CreateImportService(AppDbContext dbContext)
+    {
+        return new CustomerImportService(
+            new LegacyCustomerParser(),
+            new CustomerRepository(dbContext),
+            new ImportRepository(dbContext));
+    }
+
+    private string LegacyFilePath =>
+        Path.Combine(_contentRoot.FullName, "LegacyData", "customers_legacy.dat");
+
+    private static async Task<ImportLog> ClaimAsync(AppDbContext dbContext)
+    {
+        var job = await new ImportRepository(dbContext).ClaimNextPendingJobAsync(CancellationToken.None);
+
+        Assert.NotNull(job);
+
+        return job;
+    }
+
+    private async Task WriteFileWithEveryKindOfChangeAsync()
+    {
+        await AddCustomerAsync("0000000001", name: "Original");
+
+        await WriteLegacyFileAsync(
+            TestData.LegacyLine(legacyCustomerId: "0000000001", name: "Updated"),
+            TestData.LegacyLine(legacyCustomerId: "0000000002", name: "New"),
+            TestData.LegacyLine(legacyCustomerId: "0000000003", tier: "Z"));
+    }
+
+    [SqlServerFact]
+    public async Task Import_WritesEveryKindOfChangeInOneSaveAndOneTransaction()
+    {
+        await WriteFileWithEveryKindOfChangeAsync();
+
+        var pending = await AddPendingJobAsync();
+
+        var saves = new SaveAndCommitCounter();
+
+        await using (var dbContext = CreateDbContext(saves))
+        {
+            var job = await ClaimAsync(dbContext);
+
+            await CreateImportService(dbContext).ImportAsync(job, LegacyFilePath, CancellationToken.None);
+        }
+
+        Assert.Equal(1, saves.SaveCount);
+        Assert.Equal(1, saves.CommitCount);
+
+        var stored = await QueryAsync(context =>
+            context.ImportLogs.Include(x => x.Errors).SingleAsync(x => x.Id == pending.Id));
+
+        Assert.Equal(ImportJobStatus.Completed, stored.Status);
+        Assert.Single(stored.Errors);
+
+        var names = await QueryAsync(context =>
+            context.Customers.OrderBy(x => x.LegacyCustomerId).Select(x => x.Name).ToListAsync());
+
+        Assert.Equal(new[] { "Updated", "New" }, names);
+    }
+
+    // Every statement has run on the server when this fails, so this is the same as
+    // losing the process at the last possible moment before the commit.
+    [SqlServerFact]
+    public async Task Import_WhenCommitFails_LeavesNoCustomerErrorOrJobChanges()
+    {
+        await WriteFileWithEveryKindOfChangeAsync();
+
+        var pending = await AddPendingJobAsync();
+
+        await using (var dbContext = CreateDbContext(new FailOnCommitInterceptor()))
+        {
+            var job = await ClaimAsync(dbContext);
+
+            await Assert.ThrowsAsync<FailOnCommitInterceptor.CommitFailedException>(
+                () => CreateImportService(dbContext).ImportAsync(job, LegacyFilePath, CancellationToken.None));
+        }
+
+        var customer = await QueryAsync(context => context.Customers.SingleAsync());
+
+        Assert.Equal("Original", customer.Name);
+        Assert.Equal(0, await QueryAsync(context => context.ImportErrors.CountAsync()));
+
+        var stored = await GetJobAsync(pending.Id);
+
+        Assert.Equal(ImportJobStatus.Processing, stored.Status);
+        Assert.Null(stored.CompletedAt);
+        Assert.Equal(0, stored.ProcessedCount);
+
+        // Which is why recovery can safely run it again.
+        await RecoverAsync();
+
+        Assert.True(await RunNextJobAsync());
+
+        var completed = await GetJobAsync(pending.Id);
+
+        Assert.Equal(ImportJobStatus.Completed, completed.Status);
+        Assert.Equal(2, completed.AttemptCount);
+        Assert.Equal(1, completed.CreatedCount);
+        Assert.Equal(1, completed.UpdatedCount);
+        Assert.Equal(1, completed.FailedCount);
+        Assert.Equal(1, await QueryAsync(context => context.ImportErrors.CountAsync()));
+    }
+
+    // ---------- Why only one worker may be enabled ----------
+    // These record what goes wrong with two workers. They are not a supported mode.
+    // "Worker A" is running a job while "worker B" starts up and runs recovery.
+
+    [SqlServerFact]
+    public async Task TwoWorkers_RecoveryRequeuesAJobThatIsStillRunning()
+    {
+        var pending = await AddPendingJobAsync();
+
+        await using var workerA = CreateDbContext();
+
+        await ClaimAsync(workerA);
+
+        await RecoverAsync();
+
+        Assert.Equal(ImportJobStatus.Pending, (await GetJobAsync(pending.Id)).Status);
+    }
+
+    // The concurrency token only stops the commit: all of worker A's work is wasted.
+    [SqlServerFact]
+    public async Task TwoWorkers_RunningJobIsRejectedAtCommitAfterRecoveryRequeuesIt()
+    {
+        await WriteLegacyFileAsync(TestData.LegacyLine());
+
+        var pending = await AddPendingJobAsync();
+
+        await using var workerA = CreateDbContext();
+
+        var job = await ClaimAsync(workerA);
+
+        await RecoverAsync();
+
+        await Assert.ThrowsAsync<DbUpdateConcurrencyException>(
+            () => CreateImportService(workerA).ImportAsync(job, LegacyFilePath, CancellationToken.None));
+
+        Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
+
+        Assert.True(await RunNextJobAsync());
+
+        var completed = await GetJobAsync(pending.Id);
+
+        Assert.Equal(ImportJobStatus.Completed, completed.Status);
+        Assert.Equal(2, completed.AttemptCount);
+        Assert.Equal(1, await QueryAsync(context => context.Customers.CountAsync()));
+    }
+
+    // Both import the whole file at once. Only one commits, so customers are not
+    // duplicated, but the status cannot tell the two claims apart: whichever commits
+    // first wins, and the attempt count now overstates what really happened.
+    [SqlServerFact]
+    public async Task TwoWorkers_RunningTheSameJobConcurrently_OnlyOneCommits()
+    {
+        await WriteLegacyFileAsync(TestData.LegacyLine());
+
+        var pending = await AddPendingJobAsync();
+
+        await using var workerA = CreateDbContext();
+        await using var workerB = CreateDbContext();
+
+        var jobForA = await ClaimAsync(workerA);
+
+        await RecoverAsync();
+
+        var jobForB = await ClaimAsync(workerB);
+
+        await CreateImportService(workerA).ImportAsync(jobForA, LegacyFilePath, CancellationToken.None);
+
+        await Assert.ThrowsAnyAsync<DbUpdateException>(
+            () => CreateImportService(workerB).ImportAsync(jobForB, LegacyFilePath, CancellationToken.None));
+
+        var stored = await GetJobAsync(pending.Id);
+
+        Assert.Equal(ImportJobStatus.Completed, stored.Status);
+        Assert.Equal(2, stored.AttemptCount);
+        Assert.Equal(1, await QueryAsync(context => context.Customers.CountAsync()));
+    }
+
+    // The most visible harm: a healthy import is reported as failed, for good.
+    [SqlServerFact]
+    public async Task TwoWorkers_RecoveryCanPermanentlyFailAHealthyRunningJob()
+    {
+        await WriteLegacyFileAsync(TestData.LegacyLine());
+
+        var interrupted = await AddInterruptedJobAsync(attemptCount: MaxAttempts - 1);
+
+        await RecoverAsync();
+
+        await using var workerA = CreateDbContext();
+
+        var job = await ClaimAsync(workerA);
+
+        Assert.Equal(MaxAttempts, job.AttemptCount);
+
+        await RecoverAsync();
+
+        await Assert.ThrowsAsync<DbUpdateConcurrencyException>(
+            () => CreateImportService(workerA).ImportAsync(job, LegacyFilePath, CancellationToken.None));
+
+        var stored = await GetJobAsync(interrupted.Id);
+
+        Assert.Equal(ImportJobStatus.Failed, stored.Status);
+        Assert.Contains("interrupted too many times", stored.FailureReason);
+        Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
+    }
+
+    // ---------- Job input is not durable ----------
+    // These record a known limitation: a job stores no copy of its input, so it runs
+    // on whatever the file contains when the worker reaches it.
+
+    [SqlServerFact]
+    public async Task KnownLimitation_FileChangedAfterScheduling_ImportsTheNewContent()
+    {
+        await WriteLegacyFileAsync(TestData.LegacyLine(legacyCustomerId: "0000000001", name: "Accepted"));
+
+        var pending = await AddPendingJobAsync();
+
+        await WriteLegacyFileAsync(TestData.LegacyLine(legacyCustomerId: "0000000002", name: "Replaced"));
+
+        Assert.True(await RunNextJobAsync());
+
+        Assert.Equal(ImportJobStatus.Completed, (await GetJobAsync(pending.Id)).Status);
+
+        var customer = await QueryAsync(context => context.Customers.SingleAsync());
+
+        Assert.Equal("Replaced", customer.Name);
+    }
+
+    [SqlServerFact]
+    public async Task KnownLimitation_FileChangedBeforeRetry_RetryUsesDifferentContent()
+    {
+        await WriteLegacyFileAsync(TestData.LegacyLine(legacyCustomerId: "0000000001"));
+
+        var interrupted = await AddInterruptedJobAsync();
+
+        await WriteLegacyFileAsync(
+            TestData.LegacyLine(legacyCustomerId: "0000000002"),
+            TestData.LegacyLine(legacyCustomerId: "0000000003"));
+
+        await RecoverAsync();
+
+        Assert.True(await RunNextJobAsync());
+
+        var job = await GetJobAsync(interrupted.Id);
+
+        Assert.Equal(ImportJobStatus.Completed, job.Status);
+        Assert.Equal(2, job.CreatedCount);
+        Assert.Equal(0, await QueryAsync(context =>
+            context.Customers.CountAsync(x => x.LegacyCustomerId == "0000000001")));
+    }
+
+    // A truncated last line is only one bad row, so the job still reports Completed
+    // although most of the intended customers were never imported.
+    [SqlServerFact]
+    public async Task KnownLimitation_FileStillBeingCopied_CompletesWithPartialData()
+    {
+        var complete = TestData.LegacyLine(legacyCustomerId: "0000000001");
+        var truncated = TestData.LegacyLine(legacyCustomerId: "0000000002")[..40];
+
+        await WriteLegacyFileAsync(complete, truncated);
+
+        var pending = await AddPendingJobAsync();
+
+        Assert.True(await RunNextJobAsync());
+
+        var job = await GetJobAsync(pending.Id);
+
+        Assert.Equal(ImportJobStatus.Completed, job.Status);
+        Assert.Equal(1, job.CreatedCount);
+        Assert.Equal(1, job.FailedCount);
+    }
+
+    [SqlServerFact]
+    public async Task KnownLimitation_FileRemovedAfterScheduling_JobFailsAndCannotRecover()
+    {
+        await WriteLegacyFileAsync(TestData.LegacyLine());
+
+        var pending = await AddPendingJobAsync();
+
+        File.Delete(LegacyFilePath);
+
+        Assert.True(await RunNextJobAsync());
+
+        // Restoring the file does not help: a Failed job is final.
+        await WriteLegacyFileAsync(TestData.LegacyLine());
+
+        await RecoverAsync();
+
+        Assert.False(await RunNextJobAsync());
+
+        var job = await GetJobAsync(pending.Id);
+
+        Assert.Equal(ImportJobStatus.Failed, job.Status);
+        Assert.Contains("file was not found", job.FailureReason);
+    }
+
     // ---------- Database constraints ----------
 
     [SqlServerTheory]

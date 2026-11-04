@@ -37,22 +37,6 @@ public class RepositoryCancellationTests
     }
 
     [Fact]
-    public async Task CustomerRepository_SaveChangesAsync_PassesTokenToDbContext()
-    {
-        // Arrange
-        await using var dbContext = CreateDbContext();
-        var repository = new CustomerRepository(dbContext);
-
-        using var cancellationSource = new CancellationTokenSource();
-
-        // Act
-        await repository.SaveChangesAsync(cancellationSource.Token);
-
-        // Assert
-        Assert.Equal(cancellationSource.Token, _interceptor.CapturedToken);
-    }
-
-    [Fact]
     public async Task ImportRepository_SaveChangesAsync_PassesTokenToDbContext()
     {
         // Arrange
