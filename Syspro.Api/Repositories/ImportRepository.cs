@@ -205,13 +205,26 @@ public class ImportRepository : IImportRepository
     {
         var leaseMilliseconds = (int)leaseDuration.TotalMilliseconds;
 
-        // One statement, so it is atomic. The locks serialize concurrent claims, and they
+        // One transaction, so it is atomic. The locks serialize concurrent claims, and they
         // also make a reclaim wait for a batch that holds the job's row. The candidate is
         // always the Processing job if there is one, so a live lease stops anything else
         // from starting, which keeps jobs in order.
+        //
+        // SYSUTCDATETIME() is fixed when a statement starts, so the first statement decides
+        // using the time before any wait for the lock. The second one starts the lease once
+        // the row is held, otherwise a long wait would use it up before the worker began.
+        // XACT_ABORT rolls back on any error, including a command timeout, and the row is
+        // only returned after the commit, so a caller never sees a claim that did not happen.
         var claimed = await _dbContext.ImportLogs
             .FromSql(
                 $"""
+                 SET NOCOUNT ON;
+                 SET XACT_ABORT ON;
+
+                 DECLARE @Claimed TABLE ([Id] int NOT NULL);
+
+                 BEGIN TRANSACTION;
+
                  WITH [Candidate] AS (
                      SELECT TOP (1) *
                      FROM [ImportLogs] WITH (UPDLOCK, ROWLOCK, HOLDLOCK)
@@ -226,8 +239,16 @@ public class ImportRepository : IImportRepository
                      [AttemptCount] = [AttemptCount] + 1,
                      [ConsecutiveFailureCount] = [ConsecutiveFailureCount] + 1,
                      [StartedAt] = SYSUTCDATETIME()
-                 OUTPUT inserted.*
-                 WHERE [Status] = 'Pending' OR [LeaseExpiresAt] < SYSUTCDATETIME()
+                 OUTPUT inserted.[Id] INTO @Claimed
+                 WHERE [Status] = 'Pending' OR [LeaseExpiresAt] < SYSUTCDATETIME();
+
+                 UPDATE [ImportLogs]
+                 SET [LeaseExpiresAt] = DATEADD(millisecond, {leaseMilliseconds}, SYSUTCDATETIME())
+                 WHERE [Id] IN (SELECT [Id] FROM @Claimed);
+
+                 COMMIT TRANSACTION;
+
+                 SELECT * FROM [ImportLogs] WHERE [Id] IN (SELECT [Id] FROM @Claimed);
                  """)
             .AsNoTracking()
             .ToListAsync(cancellationToken);

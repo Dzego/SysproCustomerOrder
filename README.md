@@ -92,9 +92,7 @@ SysproCustomerOrder/
 ├── Syspro.IntegrationTests/
 │
 ├── docs/
-│   ├── application-architecture.png
-│   ├── legacy-import-flow.png
-│   └── erd.png
+│   └── DEPLOYMENT_RUNBOOK.md
 │
 ├── docker-compose.yml
 ├── README.md
@@ -144,6 +142,41 @@ The Repository Pattern is used specifically for the legacy customer import workf
 The order workflow currently uses `AppDbContext` directly from `OrderService`. This was an intentional scope and complexity decision rather than introducing repository abstractions purely for architectural symmetry.
 
 The detailed architecture decisions and trade-offs are documented in `SOLUTION.md`.
+
+---
+
+## Background Imports
+
+Customer imports run as durable jobs in SQL Server, so nothing is lost if an instance stops.
+
+```text
+POST /api/import/customers
+   saves the job and a copy of the file in one transaction, then returns 202
+        |
+        v
+CustomerImportWorker, on any instance, polls SQL Server
+   claims the next job atomically, with a lease and a new fencing token
+        |
+        v
+CustomerImportService reads the stored copy in 1 MiB chunks, then for each batch:
+   BEGIN
+     check the fencing token and renew the lease, locking the job's row
+     look up the batch's customers as a set, then insert or update them
+     insert row errors
+     add to the counters, which advances the checkpoint
+     on the last batch: mark Completed and delete the stored copy
+   COMMIT
+```
+
+| Component | Responsibility |
+| --- | --- |
+| `ImportController` and `CustomerImportJobService` | Accept jobs and report their status |
+| `CustomerImportWorker` | Hosted service that polls for work and survives failures |
+| `CustomerImportJobRunner` | Claims a job, runs it, and decides between retrying, failing and releasing it |
+| `CustomerImportService` | Reads lines, applies the import rules, and commits each batch |
+| `ImportRepository` and `CustomerRepository` | SQL Server access, including claims and fencing |
+
+See [Deployment and Rollback Runbook](docs/DEPLOYMENT_RUNBOOK.md) before deploying.
 
 ---
 
@@ -428,7 +461,16 @@ This gives each line's database changes **at most one commit per job, not exactl
 
 The `AddImportCountersAndRetryTracking` migration checks existing rows against these rules first. If any row violates them, it stops with an error naming the rows and changes nothing. Correct those rows and run it again. When applying a generated SQL script with `sqlcmd`, use `-b` so that the script stops at that error.
 
-## Worker Configuration
+## Configuration
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `CustomerImport:MaxInputBytes` | 52428800 (50 MiB) | Largest file accepted. Up to 1 GiB. A larger file returns `413` |
+| `CustomerImport:BatchSize` | 1000 | Lines per transaction, from 1 to 10,000. Larger batches hold locks for longer |
+| `CustomerImport:LeaseDuration` | 00:02:00 | How long a crashed worker's job waits before another takes over. Up to one hour. Keep it well above the time one batch takes |
+| `CustomerImportWorker:Enabled` | true | Set to false on instances that should not process imports |
+| `CustomerImportWorker:PollInterval` | 00:00:05 | How often an idle worker looks for work. Up to five minutes |
+| `CustomerImportWorker:MaxAttempts` | 3 | Executions in a row with no batch committed before a job becomes `Failed` |
 
 ```json
 "CustomerImportWorker": {
@@ -444,13 +486,15 @@ The `AddImportCountersAndRetryTracking` migration checks existing rows against t
 
 Any number of API instances can run with the worker enabled. Only one import job runs at a time across all of them, in the order the jobs were accepted, and the others wait. This keeps results predictable, because import order decides each customer's final data.
 
-- **Claiming:** one atomic SQL statement picks the next job, and a unique index allows only one `Processing` job.
+- **Claiming:** one atomic SQL transaction picks the next job and starts its lease once it holds the row, and a unique index allows only one `Processing` job.
 - **Leases:** the claiming worker holds a lease, timed by the SQL Server clock so that clock differences between servers do not matter. Each batch renews it.
 - **Crashes:** another worker takes over once the lease expires, after `LeaseDuration` at most plus one poll, and resumes from the checkpoint.
 - **Graceful shutdown:** the job is released at once, so another worker can continue straight away.
 - **Fencing:** every claim raises the job's `FencingToken`. Each batch checks it first, and so does every other change to the job. A worker whose job was reclaimed holds an old token, so it stops without writing anything.
 
 If a batch is committing when its lease runs out, it still succeeds, because it holds the job's row and its token is still current. The reclaim waits for that commit and then resumes after it. This keeps a job from running on two workers at once in a way that can apply the same line twice, though a slow worker's in-progress work can be thrown away.
+
+**Known limitation: a frozen worker can hold up a takeover.** A lease expiring is not enough for a takeover if the worker froze during a batch, for example a suspended process or VM. It still holds the job's row in an open SQL Server transaction, so a reclaim waits for that lock, however long that takes. This is what stops two workers writing at once, so it costs time rather than correctness. A worker frozen between batches holds no lock and is taken over soon after its lease expires. See [Operational Troubleshooting](#operational-troubleshooting) for the recovery steps.
 
 `LeaseDuration` should be well above the time one batch takes. Too short a lease does not lose data, but healthy workers lose their jobs and repeat work.
 
@@ -496,14 +540,27 @@ The default is 50 MiB, and the maximum allowed setting is 1 GiB. A larger file r
 
 `BatchSize` must be between 1 and 10,000. Larger batches hold locks for longer. `LeaseDuration` must be above zero and at most one hour.
 
---- | --- |
-| Is replaced before the job runs | The job imports the new content, not what was there when it was accepted |
-| Changes before a retry | The retry uses different content from the interrupted attempt |
-| Is still being written when the job runs | Missing or cut-off rows can leave the job `Completed` with partial data |
-| Is removed before the job runs | The job becomes `Failed`, and restoring the file does not revive it. Send a new request |
-| Exists only on the instance that accepted the job | The job fails or uses a different file on the worker's instance |
+---
 
-Replace the file only when no job is `Pending` or `Processing`, and move a fully written file into place instead of copying over the existing one.
+# Operational Troubleshooting
+
+To see the state of unfinished jobs, use the query in the [runbook](docs/DEPLOYMENT_RUNBOOK.md#recovery-and-troubleshooting).
+
+| Symptom | Likely cause | What to do |
+| --- | --- | --- |
+| Job stays `Pending` | No worker is enabled and running, or another job is active. Only one runs at a time | Check `CustomerImportWorker:Enabled` and the logs. Check for a `Processing` job |
+| Job stays `Processing` with counts not moving | Its worker crashed, or it is blocked | Wait for `LeaseExpiresAt`, then another worker takes over. It needs a running worker. If `LeaseExpiresAt` keeps moving, the worker is alive and committing |
+| Takeover seems stuck after a worker froze, and other workers log `worker cycle failed` with a timeout about every 30 seconds | The frozen process holds the job's row in an open transaction, and each claim waits behind it until it times out. No data is at risk, but nothing can take over until the lock is released | Stop the frozen process, or end its SQL session with `KILL` (see the [runbook](docs/DEPLOYMENT_RUNBOOK.md#recovery-and-troubleshooting)). SQL Server rolls back the batch and another worker resumes from the last checkpoint. If the process resumes instead, it may finish its batch, and it carries on only if no other worker took the job. Otherwise it stops without writing anything more |
+| `Failed` with "Lines 1 to N were committed" | A batch failed permanently. Earlier batches remain applied | Fix the cause from the logs, using the job's id, then submit a new import |
+| `Failed` with "interrupted too many times" | The job crashed its worker, or lost it, `MaxAttempts` times with no progress | Look for out-of-memory kills or crashes. Lower `BatchSize` if batches are the problem |
+| `Failed` with "kept failing on a temporary database problem" | Deadlocks, timeouts or lost connections repeated with no progress | Check SQL Server health, then submit a new import |
+| `Failed` with "no stored input" | The job was queued before stored inputs existed | Submit a new import |
+| Many row errors with "only printable ASCII" | The file contains IDs that `varchar` cannot store safely | Correct the file. These rows change nothing |
+| `413` from the import endpoint | The file is above `MaxInputBytes` | Raise the limit, considering memory, or split the file |
+| Worker logs an error every poll | The database is unreachable or not migrated | Fix the connection or apply migrations. The API keeps running, and the worker retries |
+| `Migration stopped and nothing was changed` | Existing rows violate the new constraints | Correct the rows it names, then run it again |
+
+For a worker error, search the logs for the job's id, which appears as `JobId`. Exception details appear only there, never in `failureReason`.
 
 ---
 
@@ -1133,6 +1190,9 @@ dotnet test --filter "Category!=Integration"
 # SQL Server integration tests only
 dotnet test --filter "Category=Integration"
 
+# Only the tests that run the API as separate processes and kill them
+dotnet test --filter "Suite=RealProcess"
+
 # Where integration tests must run, such as CI. A missing Docker daemon fails.
 SYSPRO_REQUIRE_DOCKER=true dotnet test
 ```
@@ -1154,6 +1214,12 @@ docker pull --platform linux/amd64 mcr.microsoft.com/mssql/server:2022-CU14-ubun
 One container is shared by the whole run, and each test gets its own freshly migrated database, which is dropped afterwards. Connection strings come only from that container, and the API runs in a `Testing` environment that does not load user secrets, so these tests cannot reach another database.
 
 A test is skipped only when no Docker daemon is reachable. If Docker is running, any failure, including a container that will not start, fails the test.
+
+---
+
+## Real Process Tests
+
+`RealProcessRecoveryTests` starts the real API as separate operating system processes against the test's disposable database, with nothing simulated. It uses `kill -9` during an import, `SIGTERM` during a batch, and freezes a worker with `SIGSTOP`. The frozen-worker tests check SQL Server's lock and session views to confirm where the worker stopped: between batches, it is taken over while still frozen, and while holding the job's row, nothing can take over until the lock is released. They need a Unix-like system, because they send signals.
 
 ---
 
@@ -1270,12 +1336,6 @@ A customer can have many orders.
 An order belongs to one customer and contains one or more order items.
 
 An import log represents one execution of the legacy customer import and can contain multiple import errors.
-
-The complete ERD is documented in:
-
-```text
-docs/erd.png
-```
 
 ---
 
@@ -1420,18 +1480,10 @@ More detailed information about the architecture, persistence decisions, Reposit
 SOLUTION.md
 ```
 
-Supporting diagrams are stored in:
+Deployment, rollback and recovery steps are in:
 
 ```text
-docs/
-```
-
-including:
-
-```text
-application-architecture.png
-legacy-import-flow.png
-erd.png
+docs/DEPLOYMENT_RUNBOOK.md
 ```
 
 ---

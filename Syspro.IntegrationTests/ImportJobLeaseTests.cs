@@ -1,5 +1,7 @@
+using System.Data.Common;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Options;
@@ -482,6 +484,231 @@ public sealed class ImportJobLeaseTests(SqlServerFixture fixture, ITestOutputHel
     }
 
     // Snapshot reads must not let a fence see an old token. It is an update, so it must not.
+    // ---------- Claims that wait behind a lock ----------
+
+    // A job another worker claimed, with its row locked as a batch in progress would lock it.
+    private async Task<(int JobId, SqlConnection Holder, SqlTransaction Lock, short Session)> LockClaimedJobAsync(TimeSpan lease)
+    {
+        var job = await AddPendingJobAsync();
+
+        Assert.NotNull(await ClaimAsync("previous-owner", lease));
+
+        var holder = new SqlConnection(ConnectionString);
+        await holder.OpenAsync();
+
+        var transaction = holder.BeginTransaction();
+
+        await using var update = new SqlCommand(
+            $"UPDATE [ImportLogs] SET [ProcessedCount] = [ProcessedCount] WHERE [Id] = {job.Id}; SELECT CAST(@@SPID AS smallint);",
+            holder,
+            transaction);
+
+        var session = (short)(await update.ExecuteScalarAsync())!;
+
+        return (job.Id, holder, transaction, session);
+    }
+
+    // Proves from SQL Server's own view that the claim is waiting for the lock.
+    private async Task WaitUntilBlockedByAsync(short session)
+    {
+        using var timeout = new CancellationTokenSource(TestTimeout);
+
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync(timeout.Token);
+
+        await using var blocked = new SqlCommand(
+            $"SELECT COUNT(*) FROM sys.dm_exec_requests WHERE [blocking_session_id] = {session} AND [wait_type] LIKE 'LCK%'",
+            connection);
+
+        while ((int)(await blocked.ExecuteScalarAsync(timeout.Token))! == 0)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
+        }
+    }
+
+    private async Task<int> LeaseMillisecondsLeftAsync(int id)
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        await using var query = new SqlCommand(
+            $"SELECT DATEDIFF(millisecond, SYSUTCDATETIME(), [LeaseExpiresAt]) FROM [ImportLogs] WHERE [Id] = {id}",
+            connection);
+
+        return (int)(await query.ExecuteScalarAsync())!;
+    }
+
+    private static async Task<int> OpenTransactionsAsync(AppDbContext dbContext)
+    {
+        await using var query = dbContext.Database.GetDbConnection().CreateCommand();
+        query.CommandText = "SELECT @@TRANCOUNT";
+
+        return (int)(await query.ExecuteScalarAsync())!;
+    }
+
+    [SqlServerFact]
+    public async Task BlockedClaim_GetsAFreshLease_SoASecondClaimCannotReclaimTheJob()
+    {
+        var lease = TimeSpan.FromSeconds(5);
+        var waitLongerThanTheLease = TimeSpan.FromSeconds(6);
+
+        var (id, holder, transaction, session) = await LockClaimedJobAsync(TimeSpan.FromMinutes(5));
+        await using var _ = holder;
+
+        await ExpireLeasesAsync(id, transaction);
+
+        var claim = ClaimAsync("blocked-worker", lease);
+
+        await WaitUntilBlockedByAsync(session);
+        await Task.Delay(waitLongerThanTheLease);
+
+        await transaction.CommitAsync();
+
+        var claimed = await claim;
+
+        Assert.NotNull(claimed);
+        Assert.Equal(2, claimed.FencingToken);
+
+        var left = await LeaseMillisecondsLeftAsync(id);
+
+        Assert.True(left > 0, $"The new lease had already expired, by {-left} ms.");
+
+        Assert.Null(await ClaimAsync("second-worker", lease));
+
+        var job = await GetJobAsync(id);
+
+        Assert.Equal(2, job.FencingToken);
+        Assert.Equal(2, job.AttemptCount);
+        Assert.Equal("blocked-worker", job.LeaseOwner);
+    }
+
+    // It judges the lease by when it started, so it leaves a job it saw as live alone. The
+    // next poll decides again.
+    [SqlServerFact]
+    public async Task BlockedClaimThatStartedBeforeTheLeaseExpired_ChangesNothing_AndTheNextClaimSucceeds()
+    {
+        var lease = TimeSpan.FromSeconds(3);
+
+        var (id, holder, transaction, session) = await LockClaimedJobAsync(lease);
+        await using var _ = holder;
+
+        var claim = ClaimAsync("blocked-worker", TimeSpan.FromMinutes(5));
+
+        await WaitUntilBlockedByAsync(session);
+        await Task.Delay(lease + TimeSpan.FromSeconds(1));
+
+        await transaction.CommitAsync();
+
+        Assert.Null(await claim);
+
+        var job = await GetJobAsync(id);
+
+        Assert.Equal(1, job.FencingToken);
+        Assert.Equal(1, job.AttemptCount);
+        Assert.Equal("previous-owner", job.LeaseOwner);
+
+        var next = await ClaimAsync("next-worker");
+
+        Assert.NotNull(next);
+        Assert.Equal(2, next.FencingToken);
+    }
+
+    [SqlServerFact]
+    public async Task ClaimThatTimesOutBehindALock_LeavesNoTransactionOrChanges()
+    {
+        var (id, holder, transaction, session) = await LockClaimedJobAsync(TimeSpan.FromMinutes(5));
+        await using var _ = holder;
+
+        await ExpireLeasesAsync(id, transaction);
+
+        await using var dbContext = CreateDbContext();
+        dbContext.Database.SetCommandTimeout(TimeSpan.FromSeconds(2));
+        await dbContext.Database.OpenConnectionAsync();
+
+        var exception = await Assert.ThrowsAsync<SqlException>(() => ClaimAsync(dbContext, "timed-out-worker"));
+
+        Assert.Equal(-2, exception.Number);
+        Assert.Equal(0, await OpenTransactionsAsync(dbContext));
+
+        await transaction.CommitAsync();
+
+        var job = await GetJobAsync(id);
+
+        Assert.Equal(1, job.FencingToken);
+        Assert.Equal(1, job.AttemptCount);
+        Assert.Equal("previous-owner", job.LeaseOwner);
+
+        // The same connection works, and its claim is the first to count.
+        var next = await ClaimAsync(dbContext, "next-worker");
+
+        Assert.NotNull(next);
+        Assert.Equal(2, next.FencingToken);
+    }
+
+    [SqlServerFact]
+    public async Task ClaimThatFailsBeforeRefreshingTheLease_RollsBackTheWholeClaim()
+    {
+        var job = await AddPendingJobAsync();
+
+        await using var dbContext = CreateDbContext(new FailClaimPartwayInterceptor());
+        await dbContext.Database.OpenConnectionAsync();
+
+        var exception = await Assert.ThrowsAsync<SqlException>(() => ClaimAsync(dbContext));
+
+        Assert.Equal(FailClaimPartwayInterceptor.ErrorNumber, exception.Number);
+        Assert.Equal(0, await OpenTransactionsAsync(dbContext));
+
+        var unchanged = await GetJobAsync(job.Id);
+
+        Assert.Equal(ImportJobStatus.Pending, unchanged.Status);
+        Assert.Equal(0, unchanged.FencingToken);
+        Assert.Equal(0, unchanged.AttemptCount);
+        Assert.Equal(0, unchanged.ConsecutiveFailureCount);
+        Assert.Null(unchanged.LeaseOwner);
+        Assert.Null(unchanged.LeaseExpiresAt);
+
+        var next = await ClaimAsync();
+
+        Assert.NotNull(next);
+        Assert.Equal(1, next.FencingToken);
+    }
+
+    // Expires the lease through the lock's own transaction, since that row is locked.
+    private static async Task ExpireLeasesAsync(int id, SqlTransaction transaction)
+    {
+        await using var expire = new SqlCommand(
+            $"UPDATE [ImportLogs] SET [LeaseExpiresAt] = DATEADD(second, -1, SYSUTCDATETIME()) WHERE [Id] = {id}",
+            transaction.Connection,
+            transaction);
+
+        await expire.ExecuteNonQueryAsync();
+    }
+
+    // Raises a real SQL Server error between the claim's two statements.
+    private sealed class FailClaimPartwayInterceptor : DbCommandInterceptor
+    {
+        public const int ErrorNumber = 50000;
+
+        private const string EndOfClaimStatement = "[LeaseExpiresAt] < SYSUTCDATETIME();";
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains(EndOfClaimStatement, StringComparison.Ordinal))
+            {
+                command.CommandText = command.CommandText.Replace(
+                    EndOfClaimStatement,
+                    $"{EndOfClaimStatement} THROW {ErrorNumber}, 'Failed partway through the claim.', 1;",
+                    StringComparison.Ordinal);
+            }
+
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+
     [SqlServerFact]
     public async Task TestDatabases_UseSnapshotReads_LikeRealOnes()
     {
