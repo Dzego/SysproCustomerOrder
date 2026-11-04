@@ -409,6 +409,18 @@ The customers, row errors, `Completed` status and removal of the stored input ar
 | Job interrupted by crashes `MaxAttempts` times | The job becomes `Failed`, which stops a job that crashes the process from looping forever |
 | Import fails while running, for example a database error | The job becomes `Failed` and is not retried automatically. Send a new request to try again |
 
+## Job Counters and Attempts
+
+| Column | Meaning |
+| --- | --- |
+| `ProcessedCount` | Lines processed. The database requires this to equal `CreatedCount + UpdatedCount + FailedCount` |
+| `AttemptCount` | Executions of the job, not counting any ended by a graceful shutdown. The retry limit currently applies to this value |
+| `ConsecutiveFailureCount` | Reserved for retry limits. Nothing updates it yet, so it stays at 0 |
+
+`ImportErrors` allows one error for each line of a job.
+
+The `AddImportCountersAndRetryTracking` migration checks existing rows against these rules first. If any row violates them, it stops with an error naming the rows and changes nothing. Correct those rows and run it again. When applying a generated SQL script with `sqlcmd`, use `-b` so that the script stops at that error.
+
 ## Worker Configuration
 
 ```json

@@ -90,7 +90,8 @@ namespace Syspro.Api.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ImportLogId");
+                    b.HasIndex("ImportLogId", "LineNumber")
+                        .IsUnique();
 
                     b.ToTable("ImportErrors");
                 });
@@ -122,6 +123,9 @@ namespace Syspro.Api.Migrations
 
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("datetime2");
+
+                    b.Property<int>("ConsecutiveFailureCount")
+                        .HasColumnType("int");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
@@ -158,6 +162,8 @@ namespace Syspro.Api.Migrations
 
                     b.ToTable("ImportLogs", t =>
                         {
+                            t.HasCheckConstraint("CK_ImportLogs_Counters", "[ProcessedCount] = [CreatedCount] + [UpdatedCount] + [FailedCount]");
+
                             t.HasCheckConstraint("CK_ImportLogs_Lifecycle", "([Status] = 'Pending' AND [StartedAt] IS NULL AND [CompletedAt] IS NULL AND [FailureReason] IS NULL)\nOR ([Status] = 'Processing' AND [StartedAt] IS NOT NULL AND [CompletedAt] IS NULL AND [FailureReason] IS NULL)\nOR ([Status] = 'Completed' AND [StartedAt] IS NOT NULL AND [CompletedAt] IS NOT NULL AND [FailureReason] IS NULL)\nOR ([Status] = 'Failed' AND [CompletedAt] IS NOT NULL AND [FailureReason] IS NOT NULL)");
 
                             t.HasCheckConstraint("CK_ImportLogs_Status", "[Status] IN ('Pending', 'Processing', 'Completed', 'Failed')");

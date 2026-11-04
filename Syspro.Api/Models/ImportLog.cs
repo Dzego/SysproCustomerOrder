@@ -15,7 +15,12 @@ public class ImportLog
 
     public DateTime? CompletedAt { get; set; }
 
+    // Executions of this job, not counting any ended by a graceful shutdown. The retry
+    // limit currently applies to this value.
     public int AttemptCount { get; set; }
+
+    // Reserved for retry limits. Nothing updates it yet.
+    public int ConsecutiveFailureCount { get; set; }
 
     // Returned to clients, so it must never contain exception details.
     public string? FailureReason { get; set; }

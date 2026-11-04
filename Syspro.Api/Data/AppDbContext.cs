@@ -150,6 +150,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
         importLog.ToTable(table =>
         {
             table.HasCheckConstraint(
+                "CK_ImportLogs_Counters",
+                "[ProcessedCount] = [CreatedCount] + [UpdatedCount] + [FailedCount]");
+
+            table.HasCheckConstraint(
                 "CK_ImportLogs_Status",
                 "[Status] IN ('Pending', 'Processing', 'Completed', 'Failed')");
 
@@ -184,7 +188,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
             .HasMaxLength(500)
             .IsRequired();
 
-        importError.HasIndex(x => x.ImportLogId);
+        // Each line of an import can have only one error. This also serves the foreign key.
+        importError.HasIndex(x => new { x.ImportLogId, x.LineNumber })
+            .IsUnique();
 
         importError.HasOne(x => x.ImportLog)
             .WithMany(x => x.Errors)
