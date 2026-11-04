@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Syspro.Api.Data;
 using Syspro.Api.Models;
@@ -11,7 +12,6 @@ namespace Syspro.Tests.Services;
 // they are verified against SQL Server in Syspro.IntegrationTests.
 public sealed class CustomerImportServiceTests : IDisposable
 {
-    private readonly string _filePath = Path.GetTempFileName();
     private readonly AppDbContext _dbContext;
     private readonly CustomerImportService _service;
 
@@ -32,7 +32,6 @@ public sealed class CustomerImportServiceTests : IDisposable
     public void Dispose()
     {
         _dbContext.Dispose();
-        File.Delete(_filePath);
     }
 
     private static string BuildLine(
@@ -57,20 +56,33 @@ public sealed class CustomerImportServiceTests : IDisposable
             Status = ImportJobStatus.Processing,
             CreatedAt = now,
             StartedAt = now,
-            AttemptCount = 1
+            AttemptCount = 1,
+            Input = new ImportJobInput { Content = [] }
         };
 
         _dbContext.ImportLogs.Add(job);
         await _dbContext.SaveChangesAsync();
 
+        // The worker reads the input without tracking it, so match that here.
+        _dbContext.Entry(job.Input).State = EntityState.Detached;
+        job.Input = null;
+
         return job;
+    }
+
+    private static byte[] ToInput(params string[] lines)
+    {
+        return Encoding.UTF8.GetBytes(string.Concat(lines.Select(line => line + "\n")));
+    }
+
+    private async Task<Syspro.Api.DTOs.ImportResult> ImportBytesAsync(byte[] input)
+    {
+        return await _service.ImportAsync(await AddClaimedJobAsync(), input, CancellationToken.None);
     }
 
     private async Task<Syspro.Api.DTOs.ImportResult> ImportAsync(params string[] lines)
     {
-        await File.WriteAllLinesAsync(_filePath, lines);
-
-        return await _service.ImportAsync(await AddClaimedJobAsync(), _filePath, CancellationToken.None);
+        return await ImportBytesAsync(ToInput(lines));
     }
 
     [Fact]
@@ -179,19 +191,72 @@ public sealed class CustomerImportServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ImportAsync_WhenFileIsMissing_ThrowsAndLeavesJobUnfinished()
+    public async Task ImportAsync_RemovesTheStoredInputWhenItCompletes()
     {
-        var job = await AddClaimedJobAsync();
+        await ImportAsync(BuildLine());
 
-        var action = () => _service.ImportAsync(
-            job,
-            Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()),
-            CancellationToken.None);
+        Assert.Equal(0, await _dbContext.ImportJobInputs.CountAsync());
+    }
 
-        await Assert.ThrowsAsync<FileNotFoundException>(action);
-        Assert.Equal(ImportJobStatus.Processing, job.Status);
-        Assert.Null(job.CompletedAt);
-        Assert.Equal(0, await _dbContext.Customers.CountAsync());
+    // ---------- Reading the stored input ----------
+
+    // The file used to be read by File.ReadAllLines, so stored input must decode alike.
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    [InlineData("\r")]
+    public async Task ImportAsync_RecognizesEveryLineEnding(string lineEnding)
+    {
+        var input = Encoding.UTF8.GetBytes(
+            BuildLine(legacyCustomerId: "0000000001") + lineEnding +
+            BuildLine(legacyCustomerId: "0000000002") + lineEnding);
+
+        var result = await ImportBytesAsync(input);
+
+        Assert.Equal(2, result.Created);
+        Assert.Equal(0, result.Failed);
+    }
+
+    [Fact]
+    public async Task ImportAsync_WithoutFinalLineEnding_ReadsTheLastRow()
+    {
+        var input = Encoding.UTF8.GetBytes(BuildLine());
+
+        Assert.Equal(1, (await ImportBytesAsync(input)).Created);
+    }
+
+    [Fact]
+    public async Task ImportAsync_IgnoresByteOrderMarkAtStartOfInput()
+    {
+        var input = Encoding.UTF8.GetPreamble().Concat(ToInput(BuildLine())).ToArray();
+
+        var result = await ImportBytesAsync(input);
+
+        Assert.Equal(1, result.Created);
+        Assert.Equal("0000012345", (await _dbContext.Customers.SingleAsync()).LegacyCustomerId);
+    }
+
+    [Fact]
+    public async Task ImportAsync_DecodesInputTheSameWayAsReadingTheFile()
+    {
+        var path = Path.GetTempFileName();
+
+        try
+        {
+            var name = "Ñandú Škoda 日本語";
+
+            await File.WriteAllLinesAsync(path, [BuildLine(name: name)]);
+
+            var fromFile = (await File.ReadAllLinesAsync(path)).Single();
+
+            await ImportBytesAsync(await File.ReadAllBytesAsync(path));
+
+            Assert.Equal(fromFile.Substring(10, 30).Trim(), (await _dbContext.Customers.SingleAsync()).Name);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     // ---------- Duplicate legacy IDs ----------
@@ -348,11 +413,9 @@ public sealed class CustomerImportServiceTests : IDisposable
             new FailingCustomerRepository(),
             new ImportRepository(_dbContext));
 
-        await File.WriteAllLinesAsync(_filePath, [BuildLine()]);
-
         var job = await AddClaimedJobAsync();
 
-        var action = () => service.ImportAsync(job, _filePath, CancellationToken.None);
+        var action = () => service.ImportAsync(job, ToInput(BuildLine()), CancellationToken.None);
 
         await Assert.ThrowsAsync<InvalidOperationException>(action);
         Assert.Equal(0, await _dbContext.ImportErrors.CountAsync());

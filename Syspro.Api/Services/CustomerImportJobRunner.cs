@@ -10,8 +10,8 @@ namespace Syspro.Api.Services;
 // and never exception messages. The exception itself goes only to the logs.
 public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
 {
-    private const string FileMissingReason =
-        "The legacy customer file was not found. No customers were changed.";
+    private const string InputMissingReason =
+        "The import job has no stored input, so it could not run. No customers were changed. Submit a new import.";
 
     private const string DatabaseFailureReason =
         "The import could not be saved to the database. No customers were changed.";
@@ -26,20 +26,17 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
 
     private readonly IImportRepository _importRepository;
     private readonly ICustomerImportService _importService;
-    private readonly IHostEnvironment _environment;
     private readonly CustomerImportWorkerOptions _options;
     private readonly ILogger<CustomerImportJobRunner> _logger;
 
     public CustomerImportJobRunner(
         IImportRepository importRepository,
         ICustomerImportService importService,
-        IHostEnvironment environment,
         IOptions<CustomerImportWorkerOptions> options,
         ILogger<CustomerImportJobRunner> logger)
     {
         _importRepository = importRepository;
         _importService = importService;
-        _environment = environment;
         _options = options.Value;
         _logger = logger;
     }
@@ -83,10 +80,22 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
 
         try
         {
-            var result = await _importService.ImportAsync(
-                job,
-                LegacyCustomerFile.GetPath(_environment),
-                stoppingToken);
+            // Deliberately has no access to the file. A job without its stored input
+            // must fail, because the file may no longer be what was accepted.
+            var input = await _importRepository.GetJobInputAsync(jobId, stoppingToken);
+
+            if (input is null)
+            {
+                _logger.LogError(
+                    "Import job {JobId} has no stored input and was marked as failed. It was probably accepted before input snapshots were introduced",
+                    jobId);
+
+                await _importRepository.MarkJobFailedAsync(jobId, InputMissingReason, stoppingToken);
+
+                return true;
+            }
+
+            var result = await _importService.ImportAsync(job, input, stoppingToken);
 
             _logger.LogInformation(
                 "Completed import job {JobId}: {ProcessedCount} processed, {CreatedCount} created, {UpdatedCount} updated, {FailedCount} failed",
@@ -143,7 +152,6 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
     {
         return exception switch
         {
-            FileNotFoundException or DirectoryNotFoundException => FileMissingReason,
             DbUpdateException => DatabaseFailureReason,
             _ => UnexpectedFailureReason
         };

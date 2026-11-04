@@ -20,7 +20,8 @@ public sealed class ApiFactory(
     string? contentRoot = null,
     IInterceptor[]? interceptors = null,
     IOrderService? orderService = null,
-    bool runImportWorker = false) : WebApplicationFactory<Program>
+    bool runImportWorker = false,
+    int? maxInputBytes = null) : WebApplicationFactory<Program>
 {
     public CapturedLogs Logs { get; } = new();
 
@@ -46,6 +47,12 @@ public sealed class ApiFactory(
                 options.Enabled = runImportWorker;
                 options.PollInterval = TimeSpan.FromMilliseconds(50);
             });
+
+            if (maxInputBytes is not null)
+            {
+                services.Configure<CustomerImportOptions>(options =>
+                    options.MaxInputBytes = maxInputBytes.Value);
+            }
 
             services.RemoveAll<DbContextOptions<AppDbContext>>();
 

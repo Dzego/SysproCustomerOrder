@@ -60,14 +60,15 @@ public abstract class SqlServerTestBase : IAsyncLifetime
         return await query(dbContext);
     }
 
-    protected async Task<ImportLog> AddPendingJobAsync(DateTime? createdAt = null)
+    protected async Task<ImportLog> AddPendingJobAsync(DateTime? createdAt = null, byte[]? input = null)
     {
         await using var dbContext = CreateDbContext();
 
         var job = new ImportLog
         {
             Status = ImportJobStatus.Pending,
-            CreatedAt = createdAt ?? DateTime.UtcNow
+            CreatedAt = createdAt ?? DateTime.UtcNow,
+            Input = new ImportJobInput { Content = input ?? [] }
         };
 
         dbContext.ImportLogs.Add(job);

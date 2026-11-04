@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 
@@ -119,5 +120,58 @@ public sealed class FailOnCommitInterceptor : DbTransactionInterceptor
         CancellationToken cancellationToken = default)
     {
         throw new CommitFailedException();
+    }
+}
+
+// Fails a real statement partway through a save, after earlier statements have run.
+public sealed class FailCommandInterceptor(string commandContaining) : DbCommandInterceptor
+{
+    public sealed class CommandFailedException : Exception;
+
+    public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        Fail(command);
+
+        return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+    }
+
+    public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<int> result,
+        CancellationToken cancellationToken = default)
+    {
+        Fail(command);
+
+        return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+    }
+
+    private void Fail(DbCommand command)
+    {
+        if (command.CommandText.Contains(commandContaining, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new CommandFailedException();
+        }
+    }
+}
+
+// Records the SQL that reads and saves run, to prove what they do not touch.
+public sealed class CommandTextRecorder : DbCommandInterceptor
+{
+    public ConcurrentQueue<string> Commands { get; } = new();
+
+    public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        Commands.Enqueue(command.CommandText);
+
+        return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
     }
 }

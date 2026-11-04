@@ -126,6 +126,8 @@ public sealed class ImportControllerTests : IDisposable
         var body = await _client.GetStringAsync($"/api/import/jobs/{job.Id}");
 
         Assert.DoesNotContain("attemptCount", body);
+        Assert.DoesNotContain("input", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("content", body, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

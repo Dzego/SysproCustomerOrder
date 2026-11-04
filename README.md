@@ -352,7 +352,7 @@ Location: /api/import/jobs/12
 }
 ```
 
-If the legacy file does not exist, the endpoint returns `404 Not Found` and creates no job.
+If the legacy file does not exist, the endpoint returns `404 Not Found` and creates no job. If it is larger than `CustomerImport:MaxInputBytes`, the endpoint returns `413 Payload Too Large` and creates no job.
 
 ## Check an Import Job
 
@@ -393,11 +393,11 @@ Pending -> Processing -> Completed or Failed
 Processing -> Pending, when interrupted work is queued to run again
 ```
 
-The job is stored in `ImportLogs`, where the database enforces valid status and timestamp combinations. The file is read when the job runs, not when it is accepted (see "Job Input Limitation").
+The job is stored in `ImportLogs`, where the database enforces valid status and timestamp combinations. Its input is captured when it is accepted (see "Job Input Snapshot").
 
 ## Restarts and Interruptions
 
-The customers, row errors and `Completed` status are committed in one transaction, so a job that is not `Completed` has changed nothing. This is what makes running an interrupted job again safe.
+The customers, row errors, `Completed` status and removal of the stored input are committed in one transaction, so a job that is not `Completed` has changed nothing and still has its input. This is what makes running an interrupted job again safe.
 
 | Event | Result |
 | --- | --- |
@@ -439,12 +439,43 @@ Claiming is atomic, so two workers cannot claim the same `Pending` job. Recovery
 
 A concurrency check on `Status` prevents a second commit in the cases tested, but it is a safeguard and does not make several workers supported.
 
-## Job Input Limitation
+## Job Input Snapshot
 
-A job does not store a copy of its input. The legacy file is only checked for existence when the job is accepted, and is read from the local filesystem when the job runs. As a result:
+When a job is accepted, the complete legacy file is copied into `ImportJobInputs` in the same transaction as the job, so a job can never exist without its input. The worker imports only that stored copy and never reads the file.
 
 | If the file... | Then... |
 | --- | --- |
+| Is replaced after the job is accepted | The job still imports what was accepted |
+| Is deleted after the job is accepted | The job still completes |
+| Changes before a retry | The retry uses the same input as the interrupted attempt |
+
+A job with no stored input becomes `Failed` with an explanation, and is never run from the current file. This applies to any job queued before snapshots were introduced. Send a new request for those.
+
+The snapshot captures the file as it is when the request arrives, so a file that is still being written is captured partly written, and a cut-off row counts as one bad row in a `Completed` job. Move a fully written file into place rather than copying over the existing one.
+
+### Snapshot Retention
+
+| Job status | Stored input |
+| --- | --- |
+| `Pending` | Kept |
+| `Processing`, including after a crash or failed commit | Kept, because a retry needs it |
+| Requeued after an interruption | Kept |
+| `Completed` | Deleted in the same transaction as the results |
+| `Failed` | Deleted in the same transaction as the status |
+
+No scheduled cleanup is needed, because a finished job removes its own input. Reverting the `AddImportJobInputs` migration drops all stored inputs. Row-level failures stay in `ImportErrors`, where `RawData` keeps up to 80 characters of each failed row.
+
+### Maximum Input Size
+
+```json
+"CustomerImport": {
+  "MaxInputBytes": 52428800
+}
+```
+
+The default is 50 MiB, and the maximum allowed setting is 1 GiB. A larger file returns `413 Payload Too Large` and creates no job. The whole file is held in memory while it is accepted and while it is imported.
+
+--- | --- |
 | Is replaced before the job runs | The job imports the new content, not what was there when it was accepted |
 | Changes before a retry | The retry uses different content from the interrupted attempt |
 | Is still being written when the job runs | Missing or cut-off rows can leave the job `Completed` with partial data |
@@ -529,7 +560,7 @@ The service is responsible for:
 
 The repositories are responsible for persistence operations.
 
-`IImportRepository.SaveChangesAsync` is the only save in an import. Both repositories share one scoped `AppDbContext`, so that one call commits the customers, row errors and job status in a single transaction.
+`IImportRepository.SaveChangesAsync` is the only save in an import. Both repositories share one scoped `AppDbContext`, so that one call commits the customers, row errors, job status and removal of the stored input in a single transaction.
 
 A generic `IRepository<T>` abstraction was deliberately avoided. The repositories expose focused operations required by the application rather than wrapping every EF Core CRUD operation.
 

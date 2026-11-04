@@ -22,6 +22,12 @@ builder.Services.AddScoped<IImportRepository, ImportRepository>();
 builder.Services.AddScoped<LegacyCustomerParser>();
 builder.Services.AddScoped<ICustomerImportJobService, CustomerImportJobService>();
 builder.Services.AddScoped<ICustomerImportJobRunner, CustomerImportJobRunner>();
+builder.Services.AddOptions<CustomerImportOptions>()
+    .Bind(builder.Configuration.GetSection(CustomerImportOptions.SectionName))
+    .Validate(
+        options => options.HasValidMaxInputBytes,
+        "CustomerImport:MaxInputBytes must be above zero and at most 1 GiB.")
+    .ValidateOnStart();
 builder.Services.AddOptions<CustomerImportWorkerOptions>()
     .Bind(builder.Configuration.GetSection(CustomerImportWorkerOptions.SectionName))
     .Validate(

@@ -11,6 +11,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<OrderItem> OrderItems => Set<OrderItem>();
     public DbSet<ImportLog> ImportLogs => Set<ImportLog>();
     public DbSet<ImportError> ImportErrors => Set<ImportError>();
+    public DbSet<ImportJobInput> ImportJobInputs => Set<ImportJobInput>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -19,6 +20,23 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
         ConfigureOrderItem(modelBuilder);
         ConfigureImportLog(modelBuilder);
         ConfigureImportError(modelBuilder);
+        ConfigureImportJobInput(modelBuilder);
+    }
+
+    private static void ConfigureImportJobInput(ModelBuilder modelBuilder)
+    {
+        var input = modelBuilder.Entity<ImportJobInput>();
+
+        input.HasKey(x => x.ImportLogId);
+
+        input.Property(x => x.Content)
+            .HasColumnType("varbinary(max)")
+            .IsRequired();
+
+        input.HasOne(x => x.ImportLog)
+            .WithOne(x => x.Input)
+            .HasForeignKey<ImportJobInput>(x => x.ImportLogId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 
     private static void ConfigureCustomer(ModelBuilder modelBuilder)

@@ -84,6 +84,11 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
                 Status = StatusCodes.Status404NotFound,
                 Detail = exception.Message
             },
+            ImportInputTooLargeException => new ProblemDetails
+            {
+                Status = StatusCodes.Status413PayloadTooLarge,
+                Detail = exception.Message
+            },
             // Raised by the server for a malformed or oversized request body,
             // carrying the status code that describes the failure.
             BadHttpRequestException badRequest => new ProblemDetails

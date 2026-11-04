@@ -246,6 +246,19 @@ public sealed class CustomerImportWorkerTests : IAsyncDisposable
     }
 
     [Theory]
+    [InlineData(0, false)]
+    [InlineData(-1, false)]
+    [InlineData(1, true)]
+    [InlineData(CustomerImportOptions.MaxAllowedInputBytes, true)]
+    [InlineData(CustomerImportOptions.MaxAllowedInputBytes + 1, false)]
+    public void MaxInputBytes_IsBounded(int maxInputBytes, bool expected)
+    {
+        var options = new CustomerImportOptions { MaxInputBytes = maxInputBytes };
+
+        Assert.Equal(expected, options.HasValidMaxInputBytes);
+    }
+
+    [Theory]
     [InlineData("00:00:00", false)]
     [InlineData("-00:00:01", false)]
     [InlineData("00:00:00.001", true)]

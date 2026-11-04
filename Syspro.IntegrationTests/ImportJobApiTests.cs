@@ -323,7 +323,8 @@ public sealed class ImportJobApiTests(SqlServerFixture fixture) : SqlServerTestB
                 Status = ImportJobStatus.Processing,
                 CreatedAt = now,
                 StartedAt = now,
-                AttemptCount = 1
+                AttemptCount = 1,
+                Input = new ImportJobInput { Content = TestData.ToInput(TestData.LegacyLine()) }
             };
 
             dbContext.ImportLogs.Add(job);
@@ -340,7 +341,7 @@ public sealed class ImportJobApiTests(SqlServerFixture fixture) : SqlServerTestB
             new Uri($"/api/import/jobs/{jobId}", UriKind.Relative));
 
         Assert.Equal("Completed", result.Status);
-        Assert.Equal(5, result.Created);
+        Assert.Equal(1, result.Created);
 
         var stored = await QueryAsync(context => context.ImportLogs.SingleAsync());
 

@@ -8,26 +8,15 @@ namespace Syspro.Api.Controllers;
 public class ImportController : ControllerBase
 {
     private readonly ICustomerImportJobService _importJobService;
-    private readonly IWebHostEnvironment _environment;
 
-    public ImportController(
-        ICustomerImportJobService importJobService,
-        IWebHostEnvironment environment)
+    public ImportController(ICustomerImportJobService importJobService)
     {
         _importJobService = importJobService;
-        _environment = environment;
     }
 
     [HttpPost("customers")]
     public async Task<IActionResult> ImportCustomers(CancellationToken cancellationToken)
     {
-        if (!System.IO.File.Exists(LegacyCustomerFile.GetPath(_environment)))
-        {
-            return Problem(
-                detail: "Legacy customer file was not found.",
-                statusCode: StatusCodes.Status404NotFound);
-        }
-
         var job = await _importJobService.ScheduleAsync(cancellationToken);
 
         return AcceptedAtAction(nameof(GetImportJob), new { id = job.Id }, job);

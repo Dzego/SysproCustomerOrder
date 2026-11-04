@@ -95,6 +95,20 @@ namespace Syspro.Api.Migrations
                     b.ToTable("ImportErrors");
                 });
 
+            modelBuilder.Entity("Syspro.Api.Models.ImportJobInput", b =>
+                {
+                    b.Property<int>("ImportLogId")
+                        .HasColumnType("int");
+
+                    b.Property<byte[]>("Content")
+                        .IsRequired()
+                        .HasColumnType("varbinary(max)");
+
+                    b.HasKey("ImportLogId");
+
+                    b.ToTable("ImportJobInputs");
+                });
+
             modelBuilder.Entity("Syspro.Api.Models.ImportLog", b =>
                 {
                     b.Property<int>("Id")
@@ -230,6 +244,17 @@ namespace Syspro.Api.Migrations
                     b.Navigation("ImportLog");
                 });
 
+            modelBuilder.Entity("Syspro.Api.Models.ImportJobInput", b =>
+                {
+                    b.HasOne("Syspro.Api.Models.ImportLog", "ImportLog")
+                        .WithOne("Input")
+                        .HasForeignKey("Syspro.Api.Models.ImportJobInput", "ImportLogId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ImportLog");
+                });
+
             modelBuilder.Entity("Syspro.Api.Models.Order", b =>
                 {
                     b.HasOne("Syspro.Api.Models.Customer", "Customer")
@@ -260,6 +285,8 @@ namespace Syspro.Api.Migrations
             modelBuilder.Entity("Syspro.Api.Models.ImportLog", b =>
                 {
                     b.Navigation("Errors");
+
+                    b.Navigation("Input");
                 });
 
             modelBuilder.Entity("Syspro.Api.Models.Order", b =>

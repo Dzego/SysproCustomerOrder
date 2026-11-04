@@ -8,32 +8,20 @@ using Syspro.IntegrationTests.Infrastructure;
 
 namespace Syspro.IntegrationTests;
 
-public sealed class CustomerImportTests : SqlServerTestBase, IDisposable
+public sealed class CustomerImportTests(SqlServerFixture fixture) : SqlServerTestBase(fixture)
 {
-    private readonly string _filePath = Path.GetTempFileName();
-
-    public CustomerImportTests(SqlServerFixture fixture)
-        : base(fixture)
-    {
-    }
-
-    public void Dispose()
-    {
-        File.Delete(_filePath);
-    }
-
     private async Task<ImportResult> ImportAsync(
         params string[] lines)
     {
-        await File.WriteAllLinesAsync(_filePath, lines);
+        var input = TestData.ToInput(lines);
 
-        await AddPendingJobAsync();
+        await AddPendingJobAsync(input: input);
 
         await using var dbContext = CreateDbContext();
 
         var job = await ClaimJobAsync(dbContext);
 
-        return await CreateService(dbContext).ImportAsync(job, _filePath, CancellationToken.None);
+        return await CreateService(dbContext).ImportAsync(job, input, CancellationToken.None);
     }
 
     private static async Task<ImportLog> ClaimJobAsync(AppDbContext dbContext)
@@ -294,15 +282,12 @@ public sealed class CustomerImportTests : SqlServerTestBase, IDisposable
     {
         await AddCustomerAsync("0000000009", name: "Existing");
 
-        await File.WriteAllLinesAsync(
-            _filePath,
-            [
-                TestData.LegacyLine(legacyCustomerId: "0000000009", name: "Changed"),
-                TestData.LegacyLine(legacyCustomerId: "0000000001"),
-                TestData.LegacyLine(legacyCustomerId: "0000000002", tier: "Z")
-            ]);
+        var input = TestData.ToInput(
+            TestData.LegacyLine(legacyCustomerId: "0000000009", name: "Changed"),
+            TestData.LegacyLine(legacyCustomerId: "0000000001"),
+            TestData.LegacyLine(legacyCustomerId: "0000000002", tier: "Z"));
 
-        await AddPendingJobAsync();
+        await AddPendingJobAsync(input: input);
 
         await using var dbContext = CreateDbContext(
             new ConcurrentImportInterceptor(ConnectionString, "0000000001"));
@@ -310,7 +295,7 @@ public sealed class CustomerImportTests : SqlServerTestBase, IDisposable
         var job = await ClaimJobAsync(dbContext);
 
         var exception = await Assert.ThrowsAsync<DbUpdateException>(
-            () => CreateService(dbContext).ImportAsync(job, _filePath, CancellationToken.None));
+            () => CreateService(dbContext).ImportAsync(job, input, CancellationToken.None));
 
         Assert.Equal(SqlUniqueIndexViolation, TestData.SqlErrorNumber(exception));
 
@@ -331,17 +316,17 @@ public sealed class CustomerImportTests : SqlServerTestBase, IDisposable
     [SqlServerFact]
     public async Task Import_WhenCancelledBeforeSaving_PersistsNothing()
     {
-        await File.WriteAllLinesAsync(_filePath, [TestData.LegacyLine()]);
+        var input = TestData.ToInput(TestData.LegacyLine());
 
         using var cancellationSource = new CancellationTokenSource();
 
-        await AddPendingJobAsync();
+        await AddPendingJobAsync(input: input);
 
         await using var dbContext = CreateDbContext(new CancelOnSaveInterceptor(cancellationSource));
 
         var job = await ClaimJobAsync(dbContext);
 
-        var action = () => CreateService(dbContext).ImportAsync(job, _filePath, cancellationSource.Token);
+        var action = () => CreateService(dbContext).ImportAsync(job, input, cancellationSource.Token);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);
 

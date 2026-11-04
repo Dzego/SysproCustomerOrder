@@ -5,10 +5,11 @@ namespace Syspro.Api.Services;
 
 public interface ICustomerImportService
 {
-    // Writes the customers, row errors and the job's Completed status in one
-    // transaction, so a job that is not Completed has changed nothing.
+    // Writes the customers, row errors and the job's Completed status, and removes
+    // the job's stored input, in one transaction. A job that is not Completed has
+    // therefore changed nothing and still has its input for a retry.
     Task<ImportResult> ImportAsync(
         ImportLog job,
-        string filePath,
+        byte[] input,
         CancellationToken cancellationToken);
 }

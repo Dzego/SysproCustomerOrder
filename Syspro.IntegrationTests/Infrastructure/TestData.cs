@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Syspro.Api.DTOs;
@@ -85,6 +86,12 @@ public static class TestData
                email.PadRight(30) +
                signupDate.PadRight(8) +
                tier.PadRight(2);
+    }
+
+    // The bytes File.WriteAllLines would produce for these lines.
+    public static byte[] ToInput(params string[] lines)
+    {
+        return Encoding.UTF8.GetBytes(string.Concat(lines.Select(line => line + "\n")));
     }
 
     public static int SqlErrorNumber(DbUpdateException exception)

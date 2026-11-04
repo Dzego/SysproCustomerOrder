@@ -1,3 +1,4 @@
+using System.Text;
 using Syspro.Api.Models;
 using Syspro.Api.Repositories;
 using Syspro.Api.Services;
@@ -5,7 +6,7 @@ using Xunit;
 
 namespace Syspro.Tests.Services;
 
-public sealed class CustomerImportServiceCancellationTests : IDisposable
+public sealed class CustomerImportServiceCancellationTests
 {
     private const string FirstValidLine =
         "0000012345John Smith                    john.smith@example.com        20210315A ";
@@ -13,7 +14,6 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
     private const string SecondValidLine =
         "0000012346Jane Doe                      jane.doe@example.com          20201228B ";
 
-    private readonly string _filePath = Path.GetTempFileName();
     private readonly FakeCustomerRepository _customerRepository = new();
     private readonly FakeImportRepository _importRepository = new();
     private readonly ImportLog _job = new()
@@ -33,9 +33,9 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
             _importRepository);
     }
 
-    public void Dispose()
+    private static byte[] ToInput(params string[] lines)
     {
-        File.Delete(_filePath);
+        return Encoding.UTF8.GetBytes(string.Concat(lines.Select(line => line + "\n")));
     }
 
     private sealed class FakeCustomerRepository : ICustomerRepository
@@ -84,6 +84,15 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
             return Task.CompletedTask;
         }
 
+        public Task<byte[]?> GetJobInputAsync(int id, CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
+        public void RemoveJobInput(int id)
+        {
+        }
+
         public Task<ImportLog?> GetJobAsync(int id, CancellationToken cancellationToken)
         {
             throw new NotSupportedException();
@@ -117,12 +126,12 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
     public async Task ImportAsync_PassesSameTokenToEveryRepositoryCall()
     {
         // Arrange
-        await File.WriteAllLinesAsync(_filePath, [FirstValidLine]);
+        var input = ToInput(FirstValidLine);
 
         using var cancellationSource = new CancellationTokenSource();
 
         // Act
-        await _service.ImportAsync(_job, _filePath, cancellationSource.Token);
+        await _service.ImportAsync(_job, input, cancellationSource.Token);
 
         // Assert
         Assert.Equal(2, _customerRepository.ReceivedTokens.Count);
@@ -133,16 +142,16 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
             token => Assert.Equal(cancellationSource.Token, token));
     }
 
-    // The file is empty and the fakes ignore the token, so only the file read
-    // can observe the cancellation.
+    // The input is empty and the fakes ignore the token, so only the check at the
+    // start of the import can observe the cancellation.
     [Fact]
-    public async Task ImportAsync_WhenCancelled_CancelsFileRead()
+    public async Task ImportAsync_WhenAlreadyCancelled_Throws()
     {
         // Arrange
         var cancelledToken = new CancellationToken(canceled: true);
 
         // Act
-        var action = () => _service.ImportAsync(_job, _filePath, cancelledToken);
+        var action = () => _service.ImportAsync(_job, [], cancelledToken);
 
         // Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);
@@ -153,13 +162,13 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
     public async Task ImportAsync_WhenCancelledBetweenRows_StopsAndSavesNothing()
     {
         // Arrange
-        await File.WriteAllLinesAsync(_filePath, [FirstValidLine, SecondValidLine]);
+        var input = ToInput(FirstValidLine, SecondValidLine);
 
         using var cancellationSource = new CancellationTokenSource();
         _customerRepository.OnLookup = cancellationSource.Cancel;
 
         // Act
-        var action = () => _service.ImportAsync(_job, _filePath, cancellationSource.Token);
+        var action = () => _service.ImportAsync(_job, input, cancellationSource.Token);
 
         // Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);
@@ -171,7 +180,7 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
     public async Task ImportAsync_WhenLookupIsCancelled_DoesNotRecordRowFailure()
     {
         // Arrange
-        await File.WriteAllLinesAsync(_filePath, [FirstValidLine]);
+        var input = ToInput(FirstValidLine);
 
         using var cancellationSource = new CancellationTokenSource();
 
@@ -179,7 +188,7 @@ public sealed class CustomerImportServiceCancellationTests : IDisposable
             throw new OperationCanceledException(cancellationSource.Token);
 
         // Act
-        var action = () => _service.ImportAsync(_job, _filePath, cancellationSource.Token);
+        var action = () => _service.ImportAsync(_job, input, cancellationSource.Token);
 
         // Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);

@@ -29,4 +29,6 @@ public class ImportLog
     public int FailedCount { get; set; }
 
     public ICollection<ImportError> Errors { get; set; } = [];
+
+    public ImportJobInput? Input { get; set; }
 }

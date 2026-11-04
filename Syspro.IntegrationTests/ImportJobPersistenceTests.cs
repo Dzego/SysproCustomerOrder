@@ -12,29 +12,25 @@ using Syspro.IntegrationTests.Infrastructure;
 namespace Syspro.IntegrationTests;
 
 // Calls the runner directly, so that each step happens exactly when a test says.
-public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
+public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlServerTestBase(fixture)
 {
     private const int MaxAttempts = 3;
 
-    private readonly DirectoryInfo _contentRoot = Directory.CreateTempSubdirectory();
+    private byte[] _input = [];
 
-    public ImportJobPersistenceTests(SqlServerFixture fixture)
-        : base(fixture)
+    private void UseInput(params string[] lines)
     {
+        _input = TestData.ToInput(lines);
     }
 
-    public void Dispose()
+    private Task<ImportLog> AddJobWithInputAsync(DateTime? createdAt = null)
     {
-        _contentRoot.Delete(recursive: true);
+        return AddPendingJobAsync(createdAt, _input);
     }
 
-    private async Task WriteLegacyFileAsync(params string[] lines)
+    private Task<bool> HasStoredInputAsync(int jobId)
     {
-        Directory.CreateDirectory(Path.Combine(_contentRoot.FullName, "LegacyData"));
-
-        await File.WriteAllLinesAsync(
-            Path.Combine(_contentRoot.FullName, "LegacyData", "customers_legacy.dat"),
-            lines);
+        return QueryAsync(context => context.ImportJobInputs.AnyAsync(x => x.ImportLogId == jobId));
     }
 
     private CustomerImportJobRunner CreateRunner(AppDbContext dbContext)
@@ -47,7 +43,6 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
                 new LegacyCustomerParser(),
                 new CustomerRepository(dbContext),
                 importRepository),
-            new TestHostEnvironment(_contentRoot.FullName),
             Options.Create(new CustomerImportWorkerOptions { MaxAttempts = MaxAttempts }),
             NullLogger<CustomerImportJobRunner>.Instance);
     }
@@ -83,7 +78,8 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
             Status = ImportJobStatus.Processing,
             CreatedAt = now,
             StartedAt = now,
-            AttemptCount = attemptCount
+            AttemptCount = attemptCount,
+            Input = new ImportJobInput { Content = _input }
         };
 
         dbContext.ImportLogs.Add(job);
@@ -105,9 +101,9 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     {
         var invalid = TestData.LegacyLine(legacyCustomerId: "0000000002", tier: "Z");
 
-        await WriteLegacyFileAsync(TestData.LegacyLine(legacyCustomerId: "0000000001"), invalid);
+        UseInput(TestData.LegacyLine(legacyCustomerId: "0000000001"), invalid);
 
-        var pending = await AddPendingJobAsync();
+        var pending = await AddJobWithInputAsync();
 
         Assert.True(await RunNextJobAsync());
 
@@ -130,15 +126,16 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
         Assert.Equal("Invalid tier: Z", error.Reason);
 
         Assert.Equal(1, await QueryAsync(context => context.Customers.CountAsync()));
+        Assert.False(await HasStoredInputAsync(pending.Id));
     }
 
     [SqlServerFact]
     public async Task RunNextJob_ProcessesOldestJobFirstAndEachOnlyOnce()
     {
-        await WriteLegacyFileAsync(TestData.LegacyLine());
+        UseInput(TestData.LegacyLine());
 
-        var newer = await AddPendingJobAsync(new DateTime(2026, 1, 2));
-        var older = await AddPendingJobAsync(new DateTime(2026, 1, 1));
+        var newer = await AddJobWithInputAsync(new DateTime(2026, 1, 2));
+        var older = await AddJobWithInputAsync(new DateTime(2026, 1, 1));
 
         Assert.True(await RunNextJobAsync());
 
@@ -161,33 +158,14 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     // ---------- Failures ----------
 
     [SqlServerFact]
-    public async Task RunNextJob_WhenFileIsMissing_FailsWithSafeReasonAndContinues()
-    {
-        var pending = await AddPendingJobAsync();
-
-        Assert.True(await RunNextJobAsync());
-
-        var job = await GetJobAsync(pending.Id);
-
-        Assert.Equal(ImportJobStatus.Failed, job.Status);
-        Assert.NotNull(job.CompletedAt);
-        Assert.Equal(
-            "The legacy customer file was not found. No customers were changed.",
-            job.FailureReason);
-        Assert.DoesNotContain(_contentRoot.FullName, job.FailureReason);
-
-        Assert.False(await RunNextJobAsync());
-    }
-
-    [SqlServerFact]
     public async Task RunNextJob_WhenSaveFails_FailsWithoutPartialResults()
     {
-        await WriteLegacyFileAsync(
+        UseInput(
             TestData.LegacyLine(legacyCustomerId: "0000000001"),
             TestData.LegacyLine(legacyCustomerId: "0000000002"),
             TestData.LegacyLine(legacyCustomerId: "0000000003", tier: "Z"));
 
-        var pending = await AddPendingJobAsync();
+        var pending = await AddJobWithInputAsync();
 
         await using var dbContext = CreateDbContext(
             new ConcurrentImportInterceptor(ConnectionString, "0000000001"));
@@ -203,6 +181,9 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
         Assert.Equal(0, job.ProcessedCount);
         Assert.Equal(0, await QueryAsync(context => context.ImportErrors.CountAsync()));
 
+        // A Failed job is never retried, so its input has no further use.
+        Assert.False(await HasStoredInputAsync(pending.Id));
+
         // Only the row committed by the concurrent import exists.
         var customer = await QueryAsync(context => context.Customers.SingleAsync());
 
@@ -215,7 +196,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     public async Task Recover_RequeuesInterruptedJobAndLeavesOthersAlone()
     {
         var interrupted = await AddInterruptedJobAsync();
-        var pending = await AddPendingJobAsync();
+        var pending = await AddJobWithInputAsync();
 
         await RecoverAsync();
 
@@ -224,6 +205,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
         Assert.Equal(ImportJobStatus.Pending, recovered.Status);
         Assert.Null(recovered.StartedAt);
         Assert.Equal(1, recovered.AttemptCount);
+        Assert.True(await HasStoredInputAsync(interrupted.Id));
         Assert.Equal(ImportJobStatus.Pending, (await GetJobAsync(pending.Id)).Status);
     }
 
@@ -232,7 +214,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     {
         await AddCustomerAsync("0000000001", name: "Original");
 
-        await WriteLegacyFileAsync(
+        UseInput(
             TestData.LegacyLine(legacyCustomerId: "0000000001", name: "Updated"),
             TestData.LegacyLine(legacyCustomerId: "0000000002"));
 
@@ -265,14 +247,16 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
         Assert.NotNull(failed.CompletedAt);
         Assert.Contains("interrupted too many times", failed.FailureReason);
         Assert.Equal(ImportJobStatus.Pending, (await GetJobAsync(retriable.Id)).Status);
+        Assert.False(await HasStoredInputAsync(exhausted.Id));
+        Assert.True(await HasStoredInputAsync(retriable.Id));
     }
 
     [SqlServerFact]
     public async Task Recover_DoesNotChangeFinishedJobs()
     {
-        await WriteLegacyFileAsync(TestData.LegacyLine());
+        UseInput(TestData.LegacyLine());
 
-        var pending = await AddPendingJobAsync();
+        var pending = await AddJobWithInputAsync();
 
         await RunNextJobAsync();
 
@@ -292,9 +276,9 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     [SqlServerFact]
     public async Task RunNextJob_WhenShutdownInterruptsSave_RequeuesJobAndCommitsNothing()
     {
-        await WriteLegacyFileAsync(TestData.LegacyLine());
+        UseInput(TestData.LegacyLine());
 
-        var pending = await AddPendingJobAsync();
+        var pending = await AddJobWithInputAsync();
 
         var saving = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -320,6 +304,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
         Assert.Null(job.CompletedAt);
         Assert.Equal(0, job.AttemptCount);
         Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
+        Assert.True(await HasStoredInputAsync(pending.Id));
 
         // The job is not lost: the next run completes it.
         Assert.True(await RunNextJobAsync());
@@ -333,7 +318,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     [SqlServerFact]
     public async Task ClaimNextPendingJob_WhenAnotherWorkerClaimsFirst_ReturnsNoJob()
     {
-        await AddPendingJobAsync();
+        await AddJobWithInputAsync();
 
         ImportLog? otherClaim = null;
 
@@ -364,9 +349,9 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     [SqlServerFact]
     public async Task Import_WhenJobStatusChangedAfterClaim_CommitsNothing()
     {
-        await WriteLegacyFileAsync(TestData.LegacyLine());
+        UseInput(TestData.LegacyLine());
 
-        await AddPendingJobAsync();
+        await AddJobWithInputAsync();
 
         await using var dbContext = CreateDbContext();
 
@@ -387,7 +372,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
 
         var action = () => service.ImportAsync(
             job,
-            Path.Combine(_contentRoot.FullName, "LegacyData", "customers_legacy.dat"),
+            _input,
             CancellationToken.None);
 
         await Assert.ThrowsAsync<DbUpdateConcurrencyException>(action);
@@ -400,9 +385,9 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     [SqlServerFact]
     public async Task ReleaseAndMarkFailed_DoNotChangeACompletedJob()
     {
-        await WriteLegacyFileAsync(TestData.LegacyLine());
+        UseInput(TestData.LegacyLine());
 
-        var pending = await AddPendingJobAsync();
+        var pending = await AddJobWithInputAsync();
 
         await RunNextJobAsync();
 
@@ -429,9 +414,6 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
             new ImportRepository(dbContext));
     }
 
-    private string LegacyFilePath =>
-        Path.Combine(_contentRoot.FullName, "LegacyData", "customers_legacy.dat");
-
     private static async Task<ImportLog> ClaimAsync(AppDbContext dbContext)
     {
         var job = await new ImportRepository(dbContext).ClaimNextPendingJobAsync(CancellationToken.None);
@@ -445,7 +427,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     {
         await AddCustomerAsync("0000000001", name: "Original");
 
-        await WriteLegacyFileAsync(
+        UseInput(
             TestData.LegacyLine(legacyCustomerId: "0000000001", name: "Updated"),
             TestData.LegacyLine(legacyCustomerId: "0000000002", name: "New"),
             TestData.LegacyLine(legacyCustomerId: "0000000003", tier: "Z"));
@@ -456,7 +438,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     {
         await WriteFileWithEveryKindOfChangeAsync();
 
-        var pending = await AddPendingJobAsync();
+        var pending = await AddJobWithInputAsync();
 
         var saves = new SaveAndCommitCounter();
 
@@ -464,7 +446,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
         {
             var job = await ClaimAsync(dbContext);
 
-            await CreateImportService(dbContext).ImportAsync(job, LegacyFilePath, CancellationToken.None);
+            await CreateImportService(dbContext).ImportAsync(job, _input, CancellationToken.None);
         }
 
         Assert.Equal(1, saves.SaveCount);
@@ -475,6 +457,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
 
         Assert.Equal(ImportJobStatus.Completed, stored.Status);
         Assert.Single(stored.Errors);
+        Assert.False(await HasStoredInputAsync(pending.Id));
 
         var names = await QueryAsync(context =>
             context.Customers.OrderBy(x => x.LegacyCustomerId).Select(x => x.Name).ToListAsync());
@@ -489,14 +472,14 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     {
         await WriteFileWithEveryKindOfChangeAsync();
 
-        var pending = await AddPendingJobAsync();
+        var pending = await AddJobWithInputAsync();
 
         await using (var dbContext = CreateDbContext(new FailOnCommitInterceptor()))
         {
             var job = await ClaimAsync(dbContext);
 
             await Assert.ThrowsAsync<FailOnCommitInterceptor.CommitFailedException>(
-                () => CreateImportService(dbContext).ImportAsync(job, LegacyFilePath, CancellationToken.None));
+                () => CreateImportService(dbContext).ImportAsync(job, _input, CancellationToken.None));
         }
 
         var customer = await QueryAsync(context => context.Customers.SingleAsync());
@@ -509,6 +492,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
         Assert.Equal(ImportJobStatus.Processing, stored.Status);
         Assert.Null(stored.CompletedAt);
         Assert.Equal(0, stored.ProcessedCount);
+        Assert.True(await HasStoredInputAsync(pending.Id));
 
         // Which is why recovery can safely run it again.
         await RecoverAsync();
@@ -523,6 +507,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
         Assert.Equal(1, completed.UpdatedCount);
         Assert.Equal(1, completed.FailedCount);
         Assert.Equal(1, await QueryAsync(context => context.ImportErrors.CountAsync()));
+        Assert.False(await HasStoredInputAsync(pending.Id));
     }
 
     // ---------- Why only one worker may be enabled ----------
@@ -532,7 +517,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     [SqlServerFact]
     public async Task TwoWorkers_RecoveryRequeuesAJobThatIsStillRunning()
     {
-        var pending = await AddPendingJobAsync();
+        var pending = await AddJobWithInputAsync();
 
         await using var workerA = CreateDbContext();
 
@@ -547,9 +532,9 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     [SqlServerFact]
     public async Task TwoWorkers_RunningJobIsRejectedAtCommitAfterRecoveryRequeuesIt()
     {
-        await WriteLegacyFileAsync(TestData.LegacyLine());
+        UseInput(TestData.LegacyLine());
 
-        var pending = await AddPendingJobAsync();
+        var pending = await AddJobWithInputAsync();
 
         await using var workerA = CreateDbContext();
 
@@ -558,7 +543,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
         await RecoverAsync();
 
         await Assert.ThrowsAsync<DbUpdateConcurrencyException>(
-            () => CreateImportService(workerA).ImportAsync(job, LegacyFilePath, CancellationToken.None));
+            () => CreateImportService(workerA).ImportAsync(job, _input, CancellationToken.None));
 
         Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
 
@@ -577,9 +562,9 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     [SqlServerFact]
     public async Task TwoWorkers_RunningTheSameJobConcurrently_OnlyOneCommits()
     {
-        await WriteLegacyFileAsync(TestData.LegacyLine());
+        UseInput(TestData.LegacyLine());
 
-        var pending = await AddPendingJobAsync();
+        var pending = await AddJobWithInputAsync();
 
         await using var workerA = CreateDbContext();
         await using var workerB = CreateDbContext();
@@ -590,10 +575,10 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
 
         var jobForB = await ClaimAsync(workerB);
 
-        await CreateImportService(workerA).ImportAsync(jobForA, LegacyFilePath, CancellationToken.None);
+        await CreateImportService(workerA).ImportAsync(jobForA, _input, CancellationToken.None);
 
         await Assert.ThrowsAnyAsync<DbUpdateException>(
-            () => CreateImportService(workerB).ImportAsync(jobForB, LegacyFilePath, CancellationToken.None));
+            () => CreateImportService(workerB).ImportAsync(jobForB, _input, CancellationToken.None));
 
         var stored = await GetJobAsync(pending.Id);
 
@@ -606,7 +591,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
     [SqlServerFact]
     public async Task TwoWorkers_RecoveryCanPermanentlyFailAHealthyRunningJob()
     {
-        await WriteLegacyFileAsync(TestData.LegacyLine());
+        UseInput(TestData.LegacyLine());
 
         var interrupted = await AddInterruptedJobAsync(attemptCount: MaxAttempts - 1);
 
@@ -621,7 +606,7 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
         await RecoverAsync();
 
         await Assert.ThrowsAsync<DbUpdateConcurrencyException>(
-            () => CreateImportService(workerA).ImportAsync(job, LegacyFilePath, CancellationToken.None));
+            () => CreateImportService(workerA).ImportAsync(job, _input, CancellationToken.None));
 
         var stored = await GetJobAsync(interrupted.Id);
 
@@ -630,94 +615,57 @@ public sealed class ImportJobPersistenceTests : SqlServerTestBase, IDisposable
         Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
     }
 
-    // ---------- Job input is not durable ----------
-    // These record a known limitation: a job stores no copy of its input, so it runs
-    // on whatever the file contains when the worker reaches it.
+    // ---------- Stored input ----------
 
     [SqlServerFact]
-    public async Task KnownLimitation_FileChangedAfterScheduling_ImportsTheNewContent()
+    public async Task ImportJobInput_ForUnknownJob_IsRejected()
     {
-        await WriteLegacyFileAsync(TestData.LegacyLine(legacyCustomerId: "0000000001", name: "Accepted"));
+        await using var dbContext = CreateDbContext();
 
-        var pending = await AddPendingJobAsync();
+        dbContext.ImportJobInputs.Add(new ImportJobInput { ImportLogId = 999, Content = [1] });
 
-        await WriteLegacyFileAsync(TestData.LegacyLine(legacyCustomerId: "0000000002", name: "Replaced"));
+        var exception = await Assert.ThrowsAsync<DbUpdateException>(() => dbContext.SaveChangesAsync());
 
-        Assert.True(await RunNextJobAsync());
-
-        Assert.Equal(ImportJobStatus.Completed, (await GetJobAsync(pending.Id)).Status);
-
-        var customer = await QueryAsync(context => context.Customers.SingleAsync());
-
-        Assert.Equal("Replaced", customer.Name);
+        Assert.Equal(SqlConstraintViolation, TestData.SqlErrorNumber(exception));
     }
 
     [SqlServerFact]
-    public async Task KnownLimitation_FileChangedBeforeRetry_RetryUsesDifferentContent()
+    public async Task DeletingJob_RemovesItsStoredInput()
     {
-        await WriteLegacyFileAsync(TestData.LegacyLine(legacyCustomerId: "0000000001"));
+        UseInput(TestData.LegacyLine());
 
-        var interrupted = await AddInterruptedJobAsync();
+        var pending = await AddJobWithInputAsync();
 
-        await WriteLegacyFileAsync(
-            TestData.LegacyLine(legacyCustomerId: "0000000002"),
-            TestData.LegacyLine(legacyCustomerId: "0000000003"));
+        await using var dbContext = CreateDbContext();
 
-        await RecoverAsync();
+        await dbContext.ImportLogs.ExecuteDeleteAsync();
 
-        Assert.True(await RunNextJobAsync());
-
-        var job = await GetJobAsync(interrupted.Id);
-
-        Assert.Equal(ImportJobStatus.Completed, job.Status);
-        Assert.Equal(2, job.CreatedCount);
-        Assert.Equal(0, await QueryAsync(context =>
-            context.Customers.CountAsync(x => x.LegacyCustomerId == "0000000001")));
+        Assert.False(await HasStoredInputAsync(pending.Id));
     }
 
-    // A truncated last line is only one bad row, so the job still reports Completed
-    // although most of the intended customers were never imported.
+    // Claiming and job status reads run on every poll, and must not load the file.
     [SqlServerFact]
-    public async Task KnownLimitation_FileStillBeingCopied_CompletesWithPartialData()
+    public async Task ClaimingAndReadingJobs_DoNotLoadTheStoredInput()
     {
-        var complete = TestData.LegacyLine(legacyCustomerId: "0000000001");
-        var truncated = TestData.LegacyLine(legacyCustomerId: "0000000002")[..40];
+        UseInput(TestData.LegacyLine());
 
-        await WriteLegacyFileAsync(complete, truncated);
+        var pending = await AddJobWithInputAsync();
 
-        var pending = await AddPendingJobAsync();
+        var recorder = new CommandTextRecorder();
 
-        Assert.True(await RunNextJobAsync());
+        await using var dbContext = CreateDbContext(recorder);
 
-        var job = await GetJobAsync(pending.Id);
+        var repository = new ImportRepository(dbContext);
 
-        Assert.Equal(ImportJobStatus.Completed, job.Status);
-        Assert.Equal(1, job.CreatedCount);
-        Assert.Equal(1, job.FailedCount);
-    }
+        var claimed = await repository.ClaimNextPendingJobAsync(CancellationToken.None);
+        var read = await repository.GetJobAsync(pending.Id, CancellationToken.None);
 
-    [SqlServerFact]
-    public async Task KnownLimitation_FileRemovedAfterScheduling_JobFailsAndCannotRecover()
-    {
-        await WriteLegacyFileAsync(TestData.LegacyLine());
-
-        var pending = await AddPendingJobAsync();
-
-        File.Delete(LegacyFilePath);
-
-        Assert.True(await RunNextJobAsync());
-
-        // Restoring the file does not help: a Failed job is final.
-        await WriteLegacyFileAsync(TestData.LegacyLine());
-
-        await RecoverAsync();
-
-        Assert.False(await RunNextJobAsync());
-
-        var job = await GetJobAsync(pending.Id);
-
-        Assert.Equal(ImportJobStatus.Failed, job.Status);
-        Assert.Contains("file was not found", job.FailureReason);
+        Assert.NotNull(claimed);
+        Assert.Null(claimed.Input);
+        Assert.NotNull(read);
+        Assert.Null(read.Input);
+        Assert.NotEmpty(recorder.Commands);
+        Assert.DoesNotContain(recorder.Commands, command => command.Contains("ImportJobInputs"));
     }
 
     // ---------- Database constraints ----------

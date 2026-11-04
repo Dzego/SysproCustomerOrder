@@ -22,6 +22,8 @@ public class CustomerImportJobRunnerTests
     {
         public ImportLog? NextJob { get; set; }
 
+        public byte[]? StoredInput { get; set; } = [1, 2, 3];
+
         public int? ReleasedJobId { get; private set; }
 
         public CancellationToken ReleaseToken { get; private set; }
@@ -47,6 +49,16 @@ public class CustomerImportJobRunnerTests
         }
 
         public Task<ImportLog?> GetJobAsync(int id, CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<byte[]?> GetJobInputAsync(int id, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(StoredInput);
+        }
+
+        public void RemoveJobInput(int id)
         {
             throw new NotSupportedException();
         }
@@ -88,12 +100,15 @@ public class CustomerImportJobRunnerTests
     {
         public CancellationToken? ReceivedToken { get; private set; }
 
+        public byte[]? ReceivedInput { get; private set; }
+
         public Task<ImportResult> ImportAsync(
             ImportLog job,
-            string filePath,
+            byte[] input,
             CancellationToken cancellationToken)
         {
             ReceivedToken = cancellationToken;
+            ReceivedInput = input;
 
             return import(cancellationToken);
         }
@@ -116,7 +131,6 @@ public class CustomerImportJobRunnerTests
         return new CustomerImportJobRunner(
             _repository,
             importService,
-            new TestHostEnvironment(),
             Options.Create(new CustomerImportWorkerOptions { MaxAttempts = 3 }),
             _logger);
     }
@@ -149,15 +163,31 @@ public class CustomerImportJobRunnerTests
         Assert.True(await CreateRunner(importService).RunNextJobAsync(stopping.Token));
 
         Assert.Equal(stopping.Token, importService.ReceivedToken);
+        Assert.Equal(_repository.StoredInput, importService.ReceivedInput);
         Assert.Null(_repository.FailedJob);
         Assert.Null(_repository.ReleasedJobId);
+    }
+
+    [Fact]
+    public async Task RunNextJob_WithNoStoredInput_FailsExplicitlyWithoutImporting()
+    {
+        _repository.NextJob = CreateClaimedJob();
+        _repository.StoredInput = null;
+
+        var importService = new StubImportService(_ => throw new InvalidOperationException());
+
+        Assert.True(await CreateRunner(importService).RunNextJobAsync(CancellationToken.None));
+
+        Assert.Null(importService.ReceivedToken);
+        Assert.Equal(
+            (42, "The import job has no stored input, so it could not run. No customers were changed. Submit a new import."),
+            _repository.FailedJob);
+        Assert.Single(_logger.Entries, e => e.Level == LogLevel.Error);
     }
 
     // The reason is shown to clients, while the exception goes to the logs.
     public static TheoryData<Exception, string> FailuresAndReasons => new()
     {
-        { new FileNotFoundException(SecretText), "The legacy customer file was not found. No customers were changed." },
-        { new DirectoryNotFoundException(SecretText), "The legacy customer file was not found. No customers were changed." },
         { new DbUpdateException(SecretText), "The import could not be saved to the database. No customers were changed." },
         { new DbUpdateConcurrencyException(SecretText), "The import could not be saved to the database. No customers were changed." },
         { new InvalidOperationException(SecretText), "The import failed unexpectedly. No customers were changed." },

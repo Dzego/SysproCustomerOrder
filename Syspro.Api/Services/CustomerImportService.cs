@@ -1,3 +1,4 @@
+using System.Text;
 using Syspro.Api.Models;
 using Syspro.Api.Repositories;
 using Syspro.Api.DTOs;
@@ -22,15 +23,17 @@ public class CustomerImportService : ICustomerImportService
 
     public async Task<ImportResult> ImportAsync(
         ImportLog importLog,
-        string filePath,
+        byte[] input,
         CancellationToken cancellationToken)
     {
-        var lines = await File.ReadAllLinesAsync(filePath, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var lines = ReadLines(input);
 
         // Ignores case to match the unique index under SQL Server's default collation.
         var firstLineByLegacyId = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-        for (var index = 0; index < lines.Length; index++)
+        for (var index = 0; index < lines.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -95,8 +98,11 @@ public class CustomerImportService : ICustomerImportService
         importLog.Status = ImportJobStatus.Completed;
         importLog.CompletedAt = DateTime.UtcNow;
 
+        _importRepository.RemoveJobInput(importLog.Id);
+
         // The only save in the import. Both repositories share one scoped context, so
-        // this commits the customers, row errors and job status in one transaction.
+        // this commits the customers, row errors, job status and input removal in one
+        // transaction.
         await _importRepository.SaveChangesAsync(cancellationToken);
 
         return new ImportResult
@@ -106,6 +112,25 @@ public class CustomerImportService : ICustomerImportService
             Updated = importLog.UpdatedCount,
             Failed = importLog.FailedCount
         };
+    }
+
+    // Decodes exactly as File.ReadAllLines did: UTF-8 unless a byte order mark says
+    // otherwise, and lines ending in LF, CR or CRLF.
+    private static List<string> ReadLines(byte[] input)
+    {
+        using var reader = new StreamReader(
+            new MemoryStream(input),
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true);
+
+        var lines = new List<string>();
+
+        while (reader.ReadLine() is { } line)
+        {
+            lines.Add(line);
+        }
+
+        return lines;
     }
 
     private static void RecordFailure(

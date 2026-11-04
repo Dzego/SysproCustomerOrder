@@ -30,6 +30,19 @@ public class ImportRepository : IImportRepository
             .FirstOrDefaultAsync(job => job.Id == id, cancellationToken);
     }
 
+    public Task<byte[]?> GetJobInputAsync(int id, CancellationToken cancellationToken)
+    {
+        return _dbContext.ImportJobInputs
+            .Where(input => input.ImportLogId == id)
+            .Select(input => (byte[]?)input.Content)
+            .SingleOrDefaultAsync(cancellationToken);
+    }
+
+    public void RemoveJobInput(int id)
+    {
+        _dbContext.ImportJobInputs.Remove(new ImportJobInput { ImportLogId = id, Content = [] });
+    }
+
     public async Task<ImportLog?> ClaimNextPendingJobAsync(CancellationToken cancellationToken)
     {
         var candidateId = await _dbContext.ImportLogs
@@ -77,11 +90,13 @@ public class ImportRepository : IImportRepository
                 cancellationToken);
     }
 
-    public Task MarkJobFailedAsync(int id, string reason, CancellationToken cancellationToken)
+    public async Task MarkJobFailedAsync(int id, string reason, CancellationToken cancellationToken)
     {
         var now = DateTime.UtcNow;
 
-        return _dbContext.ImportLogs
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        await _dbContext.ImportLogs
             .Where(job => job.Id == id && job.Status == ImportJobStatus.Processing)
             .ExecuteUpdateAsync(
                 setters => setters
@@ -89,6 +104,10 @@ public class ImportRepository : IImportRepository
                     .SetProperty(job => job.CompletedAt, now)
                     .SetProperty(job => job.FailureReason, reason),
                 cancellationToken);
+
+        await DeleteFinishedJobInputsAsync(cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task<InterruptedJobRecovery> RecoverInterruptedJobsAsync(
@@ -97,6 +116,8 @@ public class ImportRepository : IImportRepository
         CancellationToken cancellationToken)
     {
         var now = DateTime.UtcNow;
+
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
 
         // Runs first so that exhausted jobs are not requeued by the next statement.
         var failed = await _dbContext.ImportLogs
@@ -116,6 +137,20 @@ public class ImportRepository : IImportRepository
                     .SetProperty(job => job.StartedAt, (DateTime?)null),
                 cancellationToken);
 
+        await DeleteFinishedJobInputsAsync(cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+
         return new InterruptedJobRecovery(requeued, failed);
+    }
+
+    // Selects by status, so this can never remove the input of a job that may still run.
+    private Task DeleteFinishedJobInputsAsync(CancellationToken cancellationToken)
+    {
+        return _dbContext.ImportJobInputs
+            .Where(input =>
+                input.ImportLog.Status == ImportJobStatus.Completed ||
+                input.ImportLog.Status == ImportJobStatus.Failed)
+            .ExecuteDeleteAsync(cancellationToken);
     }
 }

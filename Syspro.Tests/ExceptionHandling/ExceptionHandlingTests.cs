@@ -239,6 +239,25 @@ public sealed class ExceptionHandlingTests
     }
 
     [Fact]
+    public async Task ImportInputTooLargeException_ReturnsPayloadTooLarge()
+    {
+        // Arrange
+        using var factory = CreateFactoryThrowing(new ImportInputTooLargeException(1024));
+        using var client = factory.CreateClient();
+
+        // Act
+        var response = await client.GetAsync(FailingEndpoint);
+
+        // Assert
+        var problem = await ReadProblemAsync(response, HttpStatusCode.RequestEntityTooLarge);
+
+        Assert.Equal(
+            "The legacy customer file exceeds the maximum import size of 1024 bytes.",
+            problem.GetProperty("detail").GetString());
+        Assert.DoesNotContain(factory.Logs.Entries, e => e.Level >= LogLevel.Error);
+    }
+
+    [Fact]
     public async Task BadHttpRequestException_ReturnsTheStatusCodeItCarries()
     {
         // Arrange

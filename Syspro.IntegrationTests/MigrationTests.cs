@@ -310,6 +310,117 @@ public sealed class MigrationTests(SqlServerFixture fixture) : SqlServerTestBase
         Assert.Empty(columnsWithDefaults);
     }
 
+    // ---------- Input snapshot migration ----------
+
+    private const string JobTrackingMigration = "20261103230810_AddImportJobTracking";
+
+    [SqlServerFact]
+    public async Task InputSnapshotMigration_CreatesTableForFullSizeBinaryContent()
+    {
+        Assert.Equal(
+            new ColumnDefinition("varbinary", -1, null, null),
+            await ReadColumnAsync("ImportJobInputs", "Content"));
+    }
+
+    [SqlServerFact]
+    public async Task InputSnapshotMigration_FromInitialCreate_KeepsHistoryAndAddsNoInputs()
+    {
+        await MigrateToAsync(InitialCreateMigration);
+        await SeedHistoricalDataAsync();
+
+        await MigrateToAsync(null);
+
+        await AssertHistoricalDataIsIntactAsync();
+        Assert.Equal(0, await QueryAsync(context => context.ImportJobInputs.CountAsync()));
+    }
+
+    [SqlServerFact]
+    public async Task InputSnapshotMigration_FromPreviousMigration_KeepsFinishedJobs()
+    {
+        await MigrateToAsync(JobTrackingMigration);
+
+        var now = new DateTime(2026, 1, 1, 10, 0, 0);
+
+        await ExecuteSqlAsync(
+            $"""
+             INSERT INTO [ImportLogs]
+                 ([Status], [CreatedAt], [StartedAt], [CompletedAt], [AttemptCount],
+                  [ProcessedCount], [CreatedCount], [UpdatedCount], [FailedCount])
+             VALUES ('Completed', {now}, {now}, {now}, 1, 7, 5, 0, 2);
+             """);
+
+        await MigrateToAsync(null);
+
+        var job = await QueryAsync(context => context.ImportLogs.SingleAsync());
+
+        Assert.Equal(ImportJobStatus.Completed, job.Status);
+        Assert.Equal(5, job.CreatedCount);
+    }
+
+    // A job queued before snapshots existed has no input, and the file on disk may
+    // not be what was accepted. It must fail clearly rather than import that file.
+    [SqlServerFact]
+    public async Task UpgradedDatabase_QueuedJobWithoutInput_FailsWithoutReadingTheFile()
+    {
+        await MigrateToAsync(JobTrackingMigration);
+
+        var now = new DateTime(2026, 1, 1, 10, 0, 0);
+
+        await ExecuteSqlAsync(
+            $"""
+             INSERT INTO [ImportLogs]
+                 ([Status], [CreatedAt], [AttemptCount],
+                  [ProcessedCount], [CreatedCount], [UpdatedCount], [FailedCount])
+             VALUES ('Pending', {now}, 0, 0, 0, 0, 0);
+             """);
+
+        await ExecuteSqlAsync(
+            $"""
+             INSERT INTO [ImportLogs]
+                 ([Status], [CreatedAt], [StartedAt], [AttemptCount],
+                  [ProcessedCount], [CreatedCount], [UpdatedCount], [FailedCount])
+             VALUES ('Processing', {now}, {now}, 1, 0, 0, 0, 0);
+             """);
+
+        await MigrateToAsync(null);
+
+        var ids = await QueryAsync(context => context.ImportLogs.OrderBy(x => x.Id).Select(x => x.Id).ToListAsync());
+
+        // The sample legacy file exists under this host's content root.
+        using var factory = new ApiFactory(ConnectionString, runImportWorker: true);
+        using var client = factory.CreateClient();
+
+        foreach (var id in ids)
+        {
+            var job = await ImportJobClient.WaitForTerminalStatusAsync(
+                client,
+                new Uri($"/api/import/jobs/{id}", UriKind.Relative));
+
+            Assert.Equal("Failed", job.Status);
+            Assert.Equal(
+                "The import job has no stored input, so it could not run. No customers were changed. Submit a new import.",
+                job.FailureReason);
+        }
+
+        Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
+    }
+
+    [SqlServerFact]
+    public async Task InputSnapshotMigration_RevertsAndReappliesWithQueuedJobs()
+    {
+        await AddPendingJobAsync(input: [1, 2, 3]);
+
+        await MigrateToAsync(JobTrackingMigration);
+
+        Assert.Equal(1, await QueryAsync(context => context.ImportLogs.CountAsync()));
+
+        await MigrateToAsync(null);
+
+        // Reverting drops the snapshots, so the job is now one with no stored input.
+        Assert.Equal(0, await QueryAsync(context => context.ImportJobInputs.CountAsync()));
+        Assert.Equal(1, await QueryAsync(context => context.ImportLogs.CountAsync()));
+    }
+
     // The import truncates to this constant, so it must match the real column.
     [SqlServerFact]
     public async Task MigratedRawDataColumn_MatchesTheTruncationLimit()
