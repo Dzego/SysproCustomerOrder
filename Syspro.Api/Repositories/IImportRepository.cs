@@ -12,8 +12,9 @@ public interface IImportRepository
 
     Task<ImportLog?> GetJobAsync(int id, CancellationToken cancellationToken);
 
-    // Returns null when the job has no stored input.
-    Task<byte[]?> GetJobInputAsync(int id, CancellationToken cancellationToken);
+    // Returns a stream that reads the stored input in chunks, or null when the job
+    // has none. The stream queries through this repository's context.
+    Task<Stream?> OpenJobInputAsync(int id, CancellationToken cancellationToken);
 
     // Takes effect at the next SaveChangesAsync, so that the input is removed in the
     // same transaction as whatever finishes the job.

@@ -82,7 +82,7 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
         {
             // Deliberately has no access to the file. A job without its stored input
             // must fail, because the file may no longer be what was accepted.
-            var input = await _importRepository.GetJobInputAsync(jobId, stoppingToken);
+            await using var input = await _importRepository.OpenJobInputAsync(jobId, stoppingToken);
 
             if (input is null)
             {

@@ -10,6 +10,6 @@ public interface ICustomerImportService
     // therefore changed nothing and still has its input for a retry.
     Task<ImportResult> ImportAsync(
         ImportLog job,
-        byte[] input,
+        Stream input,
         CancellationToken cancellationToken);
 }

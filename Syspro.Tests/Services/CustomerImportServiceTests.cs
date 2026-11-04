@@ -77,7 +77,7 @@ public sealed class CustomerImportServiceTests : IDisposable
 
     private async Task<Syspro.Api.DTOs.ImportResult> ImportBytesAsync(byte[] input)
     {
-        return await _service.ImportAsync(await AddClaimedJobAsync(), input, CancellationToken.None);
+        return await _service.ImportAsync(await AddClaimedJobAsync(), new MemoryStream(input), CancellationToken.None);
     }
 
     private async Task<Syspro.Api.DTOs.ImportResult> ImportAsync(params string[] lines)
@@ -415,7 +415,7 @@ public sealed class CustomerImportServiceTests : IDisposable
 
         var job = await AddClaimedJobAsync();
 
-        var action = () => service.ImportAsync(job, ToInput(BuildLine()), CancellationToken.None);
+        var action = () => service.ImportAsync(job, new MemoryStream(ToInput(BuildLine())), CancellationToken.None);
 
         await Assert.ThrowsAsync<InvalidOperationException>(action);
         Assert.Equal(0, await _dbContext.ImportErrors.CountAsync());

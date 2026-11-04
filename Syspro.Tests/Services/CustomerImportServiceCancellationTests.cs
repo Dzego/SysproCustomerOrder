@@ -84,7 +84,7 @@ public sealed class CustomerImportServiceCancellationTests
             return Task.CompletedTask;
         }
 
-        public Task<byte[]?> GetJobInputAsync(int id, CancellationToken cancellationToken)
+        public Task<Stream?> OpenJobInputAsync(int id, CancellationToken cancellationToken)
         {
             throw new NotSupportedException();
         }
@@ -131,7 +131,7 @@ public sealed class CustomerImportServiceCancellationTests
         using var cancellationSource = new CancellationTokenSource();
 
         // Act
-        await _service.ImportAsync(_job, input, cancellationSource.Token);
+        await _service.ImportAsync(_job, new MemoryStream(input), cancellationSource.Token);
 
         // Assert
         Assert.Equal(2, _customerRepository.ReceivedTokens.Count);
@@ -151,7 +151,7 @@ public sealed class CustomerImportServiceCancellationTests
         var cancelledToken = new CancellationToken(canceled: true);
 
         // Act
-        var action = () => _service.ImportAsync(_job, [], cancelledToken);
+        var action = () => _service.ImportAsync(_job, new MemoryStream(), cancelledToken);
 
         // Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);
@@ -168,7 +168,7 @@ public sealed class CustomerImportServiceCancellationTests
         _customerRepository.OnLookup = cancellationSource.Cancel;
 
         // Act
-        var action = () => _service.ImportAsync(_job, input, cancellationSource.Token);
+        var action = () => _service.ImportAsync(_job, new MemoryStream(input), cancellationSource.Token);
 
         // Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);
@@ -188,7 +188,7 @@ public sealed class CustomerImportServiceCancellationTests
             throw new OperationCanceledException(cancellationSource.Token);
 
         // Act
-        var action = () => _service.ImportAsync(_job, input, cancellationSource.Token);
+        var action = () => _service.ImportAsync(_job, new MemoryStream(input), cancellationSource.Token);
 
         // Assert
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);

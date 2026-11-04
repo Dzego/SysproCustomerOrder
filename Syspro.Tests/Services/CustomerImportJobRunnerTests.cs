@@ -22,7 +22,7 @@ public class CustomerImportJobRunnerTests
     {
         public ImportLog? NextJob { get; set; }
 
-        public byte[]? StoredInput { get; set; } = [1, 2, 3];
+        public Stream? StoredInput { get; set; } = new MemoryStream([1, 2, 3]);
 
         public int? ReleasedJobId { get; private set; }
 
@@ -53,7 +53,7 @@ public class CustomerImportJobRunnerTests
             throw new NotSupportedException();
         }
 
-        public Task<byte[]?> GetJobInputAsync(int id, CancellationToken cancellationToken)
+        public Task<Stream?> OpenJobInputAsync(int id, CancellationToken cancellationToken)
         {
             return Task.FromResult(StoredInput);
         }
@@ -100,11 +100,11 @@ public class CustomerImportJobRunnerTests
     {
         public CancellationToken? ReceivedToken { get; private set; }
 
-        public byte[]? ReceivedInput { get; private set; }
+        public Stream? ReceivedInput { get; private set; }
 
         public Task<ImportResult> ImportAsync(
             ImportLog job,
-            byte[] input,
+            Stream input,
             CancellationToken cancellationToken)
         {
             ReceivedToken = cancellationToken;
@@ -163,7 +163,7 @@ public class CustomerImportJobRunnerTests
         Assert.True(await CreateRunner(importService).RunNextJobAsync(stopping.Token));
 
         Assert.Equal(stopping.Token, importService.ReceivedToken);
-        Assert.Equal(_repository.StoredInput, importService.ReceivedInput);
+        Assert.Same(_repository.StoredInput, importService.ReceivedInput);
         Assert.Null(_repository.FailedJob);
         Assert.Null(_repository.ReleasedJobId);
     }

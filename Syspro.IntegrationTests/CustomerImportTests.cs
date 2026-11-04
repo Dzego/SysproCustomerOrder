@@ -21,7 +21,7 @@ public sealed class CustomerImportTests(SqlServerFixture fixture) : SqlServerTes
 
         var job = await ClaimJobAsync(dbContext);
 
-        return await CreateService(dbContext).ImportAsync(job, input, CancellationToken.None);
+        return await CreateService(dbContext).ImportAsync(job, new MemoryStream(input), CancellationToken.None);
     }
 
     private static async Task<ImportLog> ClaimJobAsync(AppDbContext dbContext)
@@ -295,7 +295,7 @@ public sealed class CustomerImportTests(SqlServerFixture fixture) : SqlServerTes
         var job = await ClaimJobAsync(dbContext);
 
         var exception = await Assert.ThrowsAsync<DbUpdateException>(
-            () => CreateService(dbContext).ImportAsync(job, input, CancellationToken.None));
+            () => CreateService(dbContext).ImportAsync(job, new MemoryStream(input), CancellationToken.None));
 
         Assert.Equal(SqlUniqueIndexViolation, TestData.SqlErrorNumber(exception));
 
@@ -326,7 +326,7 @@ public sealed class CustomerImportTests(SqlServerFixture fixture) : SqlServerTes
 
         var job = await ClaimJobAsync(dbContext);
 
-        var action = () => CreateService(dbContext).ImportAsync(job, input, cancellationSource.Token);
+        var action = () => CreateService(dbContext).ImportAsync(job, new MemoryStream(input), cancellationSource.Token);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(action);
 

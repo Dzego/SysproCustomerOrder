@@ -372,7 +372,7 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
 
         var action = () => service.ImportAsync(
             job,
-            _input,
+            new MemoryStream(_input),
             CancellationToken.None);
 
         await Assert.ThrowsAsync<DbUpdateConcurrencyException>(action);
@@ -446,7 +446,7 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
         {
             var job = await ClaimAsync(dbContext);
 
-            await CreateImportService(dbContext).ImportAsync(job, _input, CancellationToken.None);
+            await CreateImportService(dbContext).ImportAsync(job, new MemoryStream(_input), CancellationToken.None);
         }
 
         Assert.Equal(1, saves.SaveCount);
@@ -479,7 +479,7 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
             var job = await ClaimAsync(dbContext);
 
             await Assert.ThrowsAsync<FailOnCommitInterceptor.CommitFailedException>(
-                () => CreateImportService(dbContext).ImportAsync(job, _input, CancellationToken.None));
+                () => CreateImportService(dbContext).ImportAsync(job, new MemoryStream(_input), CancellationToken.None));
         }
 
         var customer = await QueryAsync(context => context.Customers.SingleAsync());
@@ -543,7 +543,7 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
         await RecoverAsync();
 
         await Assert.ThrowsAsync<DbUpdateConcurrencyException>(
-            () => CreateImportService(workerA).ImportAsync(job, _input, CancellationToken.None));
+            () => CreateImportService(workerA).ImportAsync(job, new MemoryStream(_input), CancellationToken.None));
 
         Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
 
@@ -575,10 +575,10 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
 
         var jobForB = await ClaimAsync(workerB);
 
-        await CreateImportService(workerA).ImportAsync(jobForA, _input, CancellationToken.None);
+        await CreateImportService(workerA).ImportAsync(jobForA, new MemoryStream(_input), CancellationToken.None);
 
         await Assert.ThrowsAnyAsync<DbUpdateException>(
-            () => CreateImportService(workerB).ImportAsync(jobForB, _input, CancellationToken.None));
+            () => CreateImportService(workerB).ImportAsync(jobForB, new MemoryStream(_input), CancellationToken.None));
 
         var stored = await GetJobAsync(pending.Id);
 
@@ -606,7 +606,7 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
         await RecoverAsync();
 
         await Assert.ThrowsAsync<DbUpdateConcurrencyException>(
-            () => CreateImportService(workerA).ImportAsync(job, _input, CancellationToken.None));
+            () => CreateImportService(workerA).ImportAsync(job, new MemoryStream(_input), CancellationToken.None));
 
         var stored = await GetJobAsync(interrupted.Id);
 

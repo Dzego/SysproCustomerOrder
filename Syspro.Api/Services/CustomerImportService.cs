@@ -23,22 +23,30 @@ public class CustomerImportService : ICustomerImportService
 
     public async Task<ImportResult> ImportAsync(
         ImportLog importLog,
-        byte[] input,
+        Stream input,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var lines = ReadLines(input);
+        // Decodes exactly as File.ReadAllLines did: UTF-8 unless a byte order mark says
+        // otherwise, and lines ending in LF, CR or CRLF. It also handles characters and
+        // line endings that are split across two reads from the stream.
+        using var reader = new StreamReader(
+            input,
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true,
+            leaveOpen: true);
 
         // Ignores case to match the unique index under SQL Server's default collation.
         var firstLineByLegacyId = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-        for (var index = 0; index < lines.Count; index++)
+        var lineNumber = 0;
+
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var line = lines[index];
-            var lineNumber = index + 1;
+            lineNumber++;
 
             importLog.ProcessedCount++;
 
@@ -112,25 +120,6 @@ public class CustomerImportService : ICustomerImportService
             Updated = importLog.UpdatedCount,
             Failed = importLog.FailedCount
         };
-    }
-
-    // Decodes exactly as File.ReadAllLines did: UTF-8 unless a byte order mark says
-    // otherwise, and lines ending in LF, CR or CRLF.
-    private static List<string> ReadLines(byte[] input)
-    {
-        using var reader = new StreamReader(
-            new MemoryStream(input),
-            Encoding.UTF8,
-            detectEncodingFromByteOrderMarks: true);
-
-        var lines = new List<string>();
-
-        while (reader.ReadLine() is { } line)
-        {
-            lines.Add(line);
-        }
-
-        return lines;
     }
 
     private static void RecordFailure(

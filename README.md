@@ -473,7 +473,7 @@ No scheduled cleanup is needed, because a finished job removes its own input. Re
 }
 ```
 
-The default is 50 MiB, and the maximum allowed setting is 1 GiB. A larger file returns `413 Payload Too Large` and creates no job. The whole file is held in memory while it is accepted and while it is imported.
+The default is 50 MiB, and the maximum allowed setting is 1 GiB. A larger file returns `413 Payload Too Large` and creates no job. The whole file is held in memory while it is accepted. The worker reads it back from SQL Server in 1 MiB chunks, so reading the snapshot does not depend on its size, although customer changes still accumulate in memory until the import saves them.
 
 --- | --- |
 | Is replaced before the job runs | The job imports the new content, not what was there when it was accepted |

@@ -1,4 +1,7 @@
+using System.Data;
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Syspro.Api.Data;
 using Syspro.Api.Models;
 
@@ -30,12 +33,82 @@ public class ImportRepository : IImportRepository
             .FirstOrDefaultAsync(job => job.Id == id, cancellationToken);
     }
 
-    public Task<byte[]?> GetJobInputAsync(int id, CancellationToken cancellationToken)
+    public async Task<Stream?> OpenJobInputAsync(int id, CancellationToken cancellationToken)
     {
-        return _dbContext.ImportJobInputs
+        var length = await _dbContext.ImportJobInputs
             .Where(input => input.ImportLogId == id)
-            .Select(input => (byte[]?)input.Content)
+            .Select(input => EF.Functions.DataLength(input.Content))
             .SingleOrDefaultAsync(cancellationToken);
+
+        return length is null
+            ? null
+            : new ImportJobInputStream(
+                length.Value,
+                (offset, destination, token) => ReadJobInputChunkAsync(id, offset, destination, token));
+    }
+
+    // Uses SqlClient directly, because reading a large value through EF Core is far
+    // slower: its read time grows much faster than the size of the value. The reader
+    // is closed before this returns, so the context's connection is free for its next
+    // query. MARS is not enabled, so an open reader would make that query fail.
+    private async Task<int> ReadJobInputChunkAsync(
+        int id,
+        long offset,
+        Memory<byte> destination,
+        CancellationToken cancellationToken)
+    {
+        await _dbContext.Database.OpenConnectionAsync(cancellationToken);
+
+        try
+        {
+            await using var command = _dbContext.Database.GetDbConnection().CreateCommand();
+
+            command.Transaction = _dbContext.Database.CurrentTransaction?.GetDbTransaction();
+            command.CommandTimeout = _dbContext.Database.GetCommandTimeout() ?? command.CommandTimeout;
+            command.CommandText =
+                "SELECT SUBSTRING([Content], @start, @length) FROM [ImportJobInputs] WHERE [ImportLogId] = @id";
+
+            AddParameter(command, "@start", DbType.Int64, offset + 1);
+            AddParameter(command, "@length", DbType.Int32, destination.Length);
+            AddParameter(command, "@id", DbType.Int32, id);
+
+            await using var reader = await command.ExecuteReaderAsync(
+                CommandBehavior.SequentialAccess,
+                cancellationToken);
+
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                return 0;
+            }
+
+            await using var content = reader.GetStream(0);
+
+            var total = 0;
+            int read;
+
+            while (total < destination.Length &&
+                   (read = await content.ReadAsync(destination[total..], cancellationToken)) > 0)
+            {
+                total += read;
+            }
+
+            return total;
+        }
+        finally
+        {
+            await _dbContext.Database.CloseConnectionAsync();
+        }
+    }
+
+    private static void AddParameter(DbCommand command, string name, DbType type, object value)
+    {
+        var parameter = command.CreateParameter();
+
+        parameter.ParameterName = name;
+        parameter.DbType = type;
+        parameter.Value = value;
+
+        command.Parameters.Add(parameter);
     }
 
     public void RemoveJobInput(int id)
