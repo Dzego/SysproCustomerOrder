@@ -110,8 +110,22 @@ public sealed class CustomerImportServiceCancellationTests
         {
         }
 
+        public bool AcceptLease { get; set; } = true;
+
+        public Task<bool> RenewLeaseAsync(
+            int id,
+            long fencingToken,
+            TimeSpan leaseDuration,
+            CancellationToken cancellationToken)
+        {
+            ReceivedTokens.Add(cancellationToken);
+
+            return Task.FromResult(AcceptLease);
+        }
+
         public Task<bool> ApplyBatchProgressAsync(
             int id,
+            long fencingToken,
             int expectedProcessedCount,
             ImportBatchProgress progress,
             bool completeJob,
@@ -122,7 +136,7 @@ public sealed class CustomerImportServiceCancellationTests
             return Task.FromResult(AcceptProgress);
         }
 
-        public Task RequeueJobAsync(int id, CancellationToken cancellationToken)
+        public Task RequeueJobAsync(int id, long fencingToken, CancellationToken cancellationToken)
         {
             throw new NotSupportedException();
         }
@@ -141,25 +155,17 @@ public sealed class CustomerImportServiceCancellationTests
             throw new NotSupportedException();
         }
 
-        public Task<ImportLog?> ClaimNextPendingJobAsync(CancellationToken cancellationToken)
+        public Task<ImportLog?> ClaimNextJobAsync(string leaseOwner, TimeSpan leaseDuration, CancellationToken cancellationToken)
         {
             throw new NotSupportedException();
         }
 
-        public Task ReleaseJobAsync(int id, CancellationToken cancellationToken)
+        public Task ReleaseJobAsync(int id, long fencingToken, CancellationToken cancellationToken)
         {
             throw new NotSupportedException();
         }
 
-        public Task MarkJobFailedAsync(int id, string reason, CancellationToken cancellationToken)
-        {
-            throw new NotSupportedException();
-        }
-
-        public Task<InterruptedJobRecovery> RecoverInterruptedJobsAsync(
-            int maxAttempts,
-            string exhaustedReason,
-            CancellationToken cancellationToken)
+        public Task MarkJobFailedAsync(int id, long fencingToken, string reason, CancellationToken cancellationToken)
         {
             throw new NotSupportedException();
         }
@@ -178,7 +184,7 @@ public sealed class CustomerImportServiceCancellationTests
 
         // Assert
         Assert.Single(_customerRepository.ReceivedTokens);
-        Assert.Equal(3, _importRepository.ReceivedTokens.Count);
+        Assert.Equal(4, _importRepository.ReceivedTokens.Count);
 
         Assert.All(
             _customerRepository.ReceivedTokens.Concat(_importRepository.ReceivedTokens),
@@ -251,6 +257,19 @@ public sealed class CustomerImportServiceCancellationTests
 
         Assert.Equal(2, _importRepository.TransactionCount);
         Assert.False(readDuringTransaction);
+    }
+
+    // The fence comes first, so a worker that lost the job looks nothing up and writes nothing.
+    [Fact]
+    public async Task ImportAsync_WhenTheLeaseWasLost_StopsBeforeDoingAnyWork()
+    {
+        _importRepository.AcceptLease = false;
+
+        var action = () => _service.ImportAsync(_job, new MemoryStream(ToInput(FirstValidLine)), CancellationToken.None);
+
+        await Assert.ThrowsAsync<ImportJobStateChangedException>(action);
+        Assert.Equal(0, _customerRepository.LookupCount);
+        Assert.Equal(0, _importRepository.SaveCount);
     }
 
     [Fact]

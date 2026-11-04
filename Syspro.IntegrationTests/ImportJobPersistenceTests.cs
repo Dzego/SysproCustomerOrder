@@ -1,6 +1,5 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Syspro.Api.BackgroundJobs;
 using Syspro.Api.Data;
@@ -8,11 +7,12 @@ using Syspro.Api.Models;
 using Syspro.Api.Repositories;
 using Syspro.Api.Services;
 using Syspro.IntegrationTests.Infrastructure;
+using Xunit.Abstractions;
 
 namespace Syspro.IntegrationTests;
 
 // Calls the runner directly, so that each step happens exactly when a test says.
-public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlServerTestBase(fixture)
+public sealed class ImportJobPersistenceTests(SqlServerFixture fixture, ITestOutputHelper output) : SqlServerTestBase(fixture)
 {
     private const int MaxAttempts = 3;
 
@@ -45,7 +45,8 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
                 importRepository,
             TestData.ImportOptions()),
             Options.Create(new CustomerImportWorkerOptions { MaxAttempts = MaxAttempts }),
-            NullLogger<CustomerImportJobRunner>.Instance);
+            TestData.ImportOptions(),
+            new TestOutputLogger<CustomerImportJobRunner>(output));
     }
 
     private async Task<bool> RunNextJobAsync()
@@ -53,13 +54,6 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
         await using var dbContext = CreateDbContext();
 
         return await CreateRunner(dbContext).RunNextJobAsync(CancellationToken.None);
-    }
-
-    private async Task RecoverAsync()
-    {
-        await using var dbContext = CreateDbContext();
-
-        await CreateRunner(dbContext).RecoverInterruptedJobsAsync(CancellationToken.None);
     }
 
     private Task<ImportLog> GetJobAsync(int id)
@@ -81,6 +75,9 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
             StartedAt = now,
             AttemptCount = attemptCount,
             ConsecutiveFailureCount = attemptCount,
+            LeaseOwner = "crashed-worker",
+            LeaseExpiresAt = now.AddMinutes(-1),
+            FencingToken = attemptCount,
             Input = new ImportJobInput { Content = _input }
         };
 
@@ -195,24 +192,23 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
     // ---------- Restart recovery ----------
 
     [SqlServerFact]
-    public async Task Recover_RequeuesInterruptedJobAndLeavesOthersAlone()
+    public async Task ExpiredLease_IsReclaimedBeforeAnyPendingJob()
     {
+        var pending = await AddJobWithInputAsync(new DateTime(2026, 1, 1));
         var interrupted = await AddInterruptedJobAsync();
-        var pending = await AddJobWithInputAsync();
 
-        await RecoverAsync();
+        await using var dbContext = CreateDbContext();
 
-        var recovered = await GetJobAsync(interrupted.Id);
+        var claim = await new ImportRepository(dbContext).ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
 
-        Assert.Equal(ImportJobStatus.Pending, recovered.Status);
-        Assert.Null(recovered.StartedAt);
-        Assert.Equal(1, recovered.AttemptCount);
+        Assert.Equal(interrupted.Id, claim!.Id);
+        Assert.Equal(2, claim.AttemptCount);
         Assert.True(await HasStoredInputAsync(interrupted.Id));
         Assert.Equal(ImportJobStatus.Pending, (await GetJobAsync(pending.Id)).Status);
     }
 
     [SqlServerFact]
-    public async Task Recover_ThenRun_CompletesInterruptedJobWithoutDuplicates()
+    public async Task ReclaimAfterExpiry_CompletesInterruptedJobWithoutDuplicates()
     {
         await AddCustomerAsync("0000000001", name: "Original");
 
@@ -221,8 +217,6 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
             TestData.LegacyLine(legacyCustomerId: "0000000002"));
 
         var interrupted = await AddInterruptedJobAsync();
-
-        await RecoverAsync();
 
         Assert.True(await RunNextJobAsync());
 
@@ -236,25 +230,34 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
     }
 
     [SqlServerFact]
-    public async Task Recover_WhenAttemptsAreExhausted_FailsInsteadOfRetrying()
+    public async Task ReclaimAtTheFailureLimit_FailsInsteadOfRetrying()
     {
         var exhausted = await AddInterruptedJobAsync(attemptCount: MaxAttempts);
-        var retriable = await AddInterruptedJobAsync(attemptCount: MaxAttempts - 1);
 
-        await RecoverAsync();
+        Assert.True(await RunNextJobAsync());
 
         var failed = await GetJobAsync(exhausted.Id);
 
         Assert.Equal(ImportJobStatus.Failed, failed.Status);
         Assert.NotNull(failed.CompletedAt);
+        Assert.Null(failed.LeaseOwner);
+        Assert.Null(failed.LeaseExpiresAt);
         Assert.Contains("interrupted too many times", failed.FailureReason);
-        Assert.Equal(ImportJobStatus.Pending, (await GetJobAsync(retriable.Id)).Status);
         Assert.False(await HasStoredInputAsync(exhausted.Id));
-        Assert.True(await HasStoredInputAsync(retriable.Id));
     }
 
     [SqlServerFact]
-    public async Task Recover_DoesNotChangeFinishedJobs()
+    public async Task ReclaimJustBelowTheFailureLimit_StillRuns()
+    {
+        var retriable = await AddInterruptedJobAsync(attemptCount: MaxAttempts - 1);
+
+        Assert.True(await RunNextJobAsync());
+
+        Assert.Equal(ImportJobStatus.Completed, (await GetJobAsync(retriable.Id)).Status);
+    }
+
+    [SqlServerFact]
+    public async Task ExpiringLeases_DoesNotChangeFinishedJobs()
     {
         UseInput(TestData.LegacyLine());
 
@@ -264,7 +267,9 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
 
         var before = await GetJobAsync(pending.Id);
 
-        await RecoverAsync();
+        await ExpireLeasesAsync();
+
+        Assert.False(await RunNextJobAsync());
 
         var after = await GetJobAsync(pending.Id);
 
@@ -316,10 +321,10 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
 
     // ---------- Job ownership ----------
 
-    // Both workers read the job as Pending, and the other one updates it first. Only
-    // the status check in the update stops both from running the same job.
+    // The other worker claims immediately ahead of this one, whose claim must then find a
+    // live lease and take nothing.
     [SqlServerFact]
-    public async Task ClaimNextPendingJob_WhenAnotherWorkerClaimsFirst_ReturnsNoJob()
+    public async Task ClaimNextJob_WhenAnotherWorkerClaimsFirst_ReturnsNoJob()
     {
         await AddJobWithInputAsync();
 
@@ -330,13 +335,13 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
             await using var other = CreateDbContext();
 
             otherClaim = await new ImportRepository(other)
-                .ClaimNextPendingJobAsync(CancellationToken.None);
+                .ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
         });
 
         await using var dbContext = CreateDbContext(competingClaim);
 
         var claim = await new ImportRepository(dbContext)
-            .ClaimNextPendingJobAsync(CancellationToken.None);
+            .ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
 
         Assert.NotNull(otherClaim);
         Assert.Null(claim);
@@ -359,13 +364,13 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
         await using var dbContext = CreateDbContext();
 
         var importRepository = new ImportRepository(dbContext);
-        var job = await importRepository.ClaimNextPendingJobAsync(CancellationToken.None);
+        var job = await importRepository.ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
 
         Assert.NotNull(job);
 
         await using (var other = CreateDbContext())
         {
-            await new ImportRepository(other).MarkJobFailedAsync(job.Id, "Taken over.", CancellationToken.None);
+            await new ImportRepository(other).MarkJobFailedAsync(job.Id, job.FencingToken, "Taken over.", CancellationToken.None);
         }
 
         var service = new CustomerImportService(
@@ -399,8 +404,11 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
 
         var importRepository = new ImportRepository(dbContext);
 
-        await importRepository.ReleaseJobAsync(pending.Id, CancellationToken.None);
-        await importRepository.MarkJobFailedAsync(pending.Id, "Too late.", CancellationToken.None);
+        var token = (await GetJobAsync(pending.Id)).FencingToken;
+
+        await importRepository.ReleaseJobAsync(pending.Id, token, CancellationToken.None);
+        await importRepository.RequeueJobAsync(pending.Id, token, CancellationToken.None);
+        await importRepository.MarkJobFailedAsync(pending.Id, token, "Too late.", CancellationToken.None);
 
         var job = await GetJobAsync(pending.Id);
 
@@ -421,7 +429,7 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
 
     private static async Task<ImportLog> ClaimAsync(AppDbContext dbContext)
     {
-        var job = await new ImportRepository(dbContext).ClaimNextPendingJobAsync(CancellationToken.None);
+        var job = await new ImportRepository(dbContext).ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
 
         Assert.NotNull(job);
 
@@ -500,7 +508,7 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
         Assert.True(await HasStoredInputAsync(pending.Id));
 
         // Which is why recovery can safely run it again.
-        await RecoverAsync();
+        await ExpireLeasesAsync();
 
         Assert.True(await RunNextJobAsync());
 
@@ -515,27 +523,36 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
         Assert.False(await HasStoredInputAsync(pending.Id));
     }
 
-    // ---------- Why only one worker may be enabled ----------
-    // These record what goes wrong with two workers. They are not a supported mode.
-    // "Worker A" is running a job while "worker B" starts up and runs recovery.
+    // ---------- Two workers ----------
+    // "Worker A" is running a job while "worker B" looks for work.
 
+    // A live lease protects a running job, however often another worker polls.
     [SqlServerFact]
-    public async Task TwoWorkers_RecoveryRequeuesAJobThatIsStillRunning()
+    public async Task TwoWorkers_ALiveLeaseIsNotReclaimed()
     {
         var pending = await AddJobWithInputAsync();
 
         await using var workerA = CreateDbContext();
 
-        await ClaimAsync(workerA);
+        var job = await ClaimAsync(workerA);
 
-        await RecoverAsync();
+        await using (var workerB = CreateDbContext())
+        {
+            Assert.Null(await new ImportRepository(workerB).ClaimNextJobAsync(
+                "worker-b",
+                TimeSpan.FromMinutes(5),
+                CancellationToken.None));
+        }
 
-        Assert.Equal(ImportJobStatus.Pending, (await GetJobAsync(pending.Id)).Status);
+        var stored = await GetJobAsync(pending.Id);
+
+        Assert.Equal(job.FencingToken, stored.FencingToken);
+        Assert.Equal(ImportJobStatus.Processing, stored.Status);
     }
 
-    // The concurrency token only stops the commit: all of worker A's work is wasted.
+    // Worker A's lease lapsed and worker B took over, so A's work is rejected before it writes.
     [SqlServerFact]
-    public async Task TwoWorkers_RunningJobIsRejectedAtCommitAfterRecoveryRequeuesIt()
+    public async Task TwoWorkers_AReclaimedWorkerIsFencedAndTheNewOwnerFinishes()
     {
         UseInput(TestData.LegacyLine());
 
@@ -545,14 +562,21 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
 
         var job = await ClaimAsync(workerA);
 
-        await RecoverAsync();
+        await ExpireLeasesAsync();
 
-        await Assert.ThrowsAsync<ImportJobStateChangedException>(
-            () => CreateImportService(workerA).ImportAsync(job, new MemoryStream(_input), CancellationToken.None));
+        await using (var workerB = CreateDbContext())
+        {
+            var reclaimed = await ClaimAsync(workerB);
 
-        Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
+            Assert.True(reclaimed.FencingToken > job.FencingToken);
 
-        Assert.True(await RunNextJobAsync());
+            await Assert.ThrowsAsync<ImportJobStateChangedException>(
+                () => CreateImportService(workerA).ImportAsync(job, new MemoryStream(_input), CancellationToken.None));
+
+            Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
+
+            await CreateImportService(workerB).ImportAsync(reclaimed, new MemoryStream(_input), CancellationToken.None);
+        }
 
         var completed = await GetJobAsync(pending.Id);
 
@@ -561,63 +585,27 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
         Assert.Equal(1, await QueryAsync(context => context.Customers.CountAsync()));
     }
 
-    // Both import the whole file at once. Only one commits, so customers are not
-    // duplicated, but the status cannot tell the two claims apart: whichever commits
-    // first wins, and the attempt count now overstates what really happened.
+    // The attempt limit could otherwise fail a job that is healthy and still running.
     [SqlServerFact]
-    public async Task TwoWorkers_RunningTheSameJobConcurrently_OnlyOneCommits()
-    {
-        UseInput(TestData.LegacyLine());
-
-        var pending = await AddJobWithInputAsync();
-
-        await using var workerA = CreateDbContext();
-        await using var workerB = CreateDbContext();
-
-        var jobForA = await ClaimAsync(workerA);
-
-        await RecoverAsync();
-
-        var jobForB = await ClaimAsync(workerB);
-
-        await CreateImportService(workerA).ImportAsync(jobForA, new MemoryStream(_input), CancellationToken.None);
-
-        await Assert.ThrowsAsync<ImportJobStateChangedException>(
-            () => CreateImportService(workerB).ImportAsync(jobForB, new MemoryStream(_input), CancellationToken.None));
-
-        var stored = await GetJobAsync(pending.Id);
-
-        Assert.Equal(ImportJobStatus.Completed, stored.Status);
-        Assert.Equal(2, stored.AttemptCount);
-        Assert.Equal(1, await QueryAsync(context => context.Customers.CountAsync()));
-    }
-
-    // The most visible harm: a healthy import is reported as failed, for good.
-    [SqlServerFact]
-    public async Task TwoWorkers_RecoveryCanPermanentlyFailAHealthyRunningJob()
+    public async Task TwoWorkers_AJobAtTheLimitWithALiveLeaseIsNotFailed()
     {
         UseInput(TestData.LegacyLine());
 
         var interrupted = await AddInterruptedJobAsync(attemptCount: MaxAttempts - 1);
-
-        await RecoverAsync();
 
         await using var workerA = CreateDbContext();
 
         var job = await ClaimAsync(workerA);
 
         Assert.Equal(MaxAttempts, job.ConsecutiveFailureCount);
+        Assert.False(await RunNextJobAsync());
 
-        await RecoverAsync();
-
-        await Assert.ThrowsAsync<ImportJobStateChangedException>(
-            () => CreateImportService(workerA).ImportAsync(job, new MemoryStream(_input), CancellationToken.None));
+        await CreateImportService(workerA).ImportAsync(job, new MemoryStream(_input), CancellationToken.None);
 
         var stored = await GetJobAsync(interrupted.Id);
 
-        Assert.Equal(ImportJobStatus.Failed, stored.Status);
-        Assert.Contains("interrupted too many times", stored.FailureReason);
-        Assert.Equal(0, await QueryAsync(context => context.Customers.CountAsync()));
+        Assert.Equal(ImportJobStatus.Completed, stored.Status);
+        Assert.Null(stored.FailureReason);
     }
 
     // ---------- Stored input ----------
@@ -662,7 +650,7 @@ public sealed class ImportJobPersistenceTests(SqlServerFixture fixture) : SqlSer
 
         var repository = new ImportRepository(dbContext);
 
-        var claimed = await repository.ClaimNextPendingJobAsync(CancellationToken.None);
+        var claimed = await repository.ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
         var read = await repository.GetJobAsync(pending.Id, CancellationToken.None);
 
         Assert.NotNull(claimed);

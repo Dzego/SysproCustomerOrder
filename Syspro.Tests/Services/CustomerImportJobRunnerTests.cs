@@ -32,12 +32,6 @@ public class CustomerImportJobRunnerTests
 
         public Exception? ReleaseFailure { get; set; }
 
-        public int? RecoveryMaxAttempts { get; private set; }
-
-        public string? RecoveryReason { get; private set; }
-
-        public InterruptedJobRecovery RecoveryResult { get; set; }
-
         public Task AddLogAsync(ImportLog importLog, CancellationToken cancellationToken)
         {
             throw new NotSupportedException();
@@ -60,8 +54,18 @@ public class CustomerImportJobRunnerTests
             throw new NotSupportedException();
         }
 
+        public Task<bool> RenewLeaseAsync(
+            int id,
+            long fencingToken,
+            TimeSpan leaseDuration,
+            CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
         public Task<bool> ApplyBatchProgressAsync(
             int id,
+            long fencingToken,
             int expectedProcessedCount,
             ImportBatchProgress progress,
             bool completeJob,
@@ -74,9 +78,10 @@ public class CustomerImportJobRunnerTests
 
         public int? RequeuedJobId { get; private set; }
 
-        public Task RequeueJobAsync(int id, CancellationToken cancellationToken)
+        public Task RequeueJobAsync(int id, long fencingToken, CancellationToken cancellationToken)
         {
             RequeuedJobId = id;
+            LastToken = fencingToken;
 
             return Task.CompletedTask;
         }
@@ -97,35 +102,35 @@ public class CustomerImportJobRunnerTests
             throw new NotSupportedException();
         }
 
-        public Task<ImportLog?> ClaimNextPendingJobAsync(CancellationToken cancellationToken)
+        public long? LastToken { get; private set; }
+
+        public string? ClaimOwner { get; private set; }
+
+        public TimeSpan ClaimLease { get; private set; }
+
+        public Task<ImportLog?> ClaimNextJobAsync(string leaseOwner, TimeSpan leaseDuration, CancellationToken cancellationToken)
         {
+            ClaimOwner = leaseOwner;
+            ClaimLease = leaseDuration;
+
             return Task.FromResult(NextJob);
         }
 
-        public Task ReleaseJobAsync(int id, CancellationToken cancellationToken)
+        public Task ReleaseJobAsync(int id, long fencingToken, CancellationToken cancellationToken)
         {
             ReleasedJobId = id;
+            LastToken = fencingToken;
             ReleaseToken = cancellationToken;
 
             return ReleaseFailure is null ? Task.CompletedTask : Task.FromException(ReleaseFailure);
         }
 
-        public Task MarkJobFailedAsync(int id, string reason, CancellationToken cancellationToken)
+        public Task MarkJobFailedAsync(int id, long fencingToken, string reason, CancellationToken cancellationToken)
         {
             FailedJob = (id, reason);
+            LastToken = fencingToken;
 
             return Task.CompletedTask;
-        }
-
-        public Task<InterruptedJobRecovery> RecoverInterruptedJobsAsync(
-            int maxAttempts,
-            string exhaustedReason,
-            CancellationToken cancellationToken)
-        {
-            RecoveryMaxAttempts = maxAttempts;
-            RecoveryReason = exhaustedReason;
-
-            return Task.FromResult(RecoveryResult);
         }
     }
 
@@ -153,6 +158,8 @@ public class CustomerImportJobRunnerTests
         return new ImportLog
         {
             Id = 42,
+            FencingToken = 7,
+            ConsecutiveFailureCount = 1,
             Status = ImportJobStatus.Processing,
             CreatedAt = DateTime.UtcNow,
             StartedAt = DateTime.UtcNow,
@@ -166,6 +173,7 @@ public class CustomerImportJobRunnerTests
             _repository,
             importService,
             Options.Create(new CustomerImportWorkerOptions { MaxAttempts = 3 }),
+            Options.Create(new CustomerImportOptions { LeaseDuration = TimeSpan.FromSeconds(90) }),
             _logger);
     }
 
@@ -342,26 +350,81 @@ public class CustomerImportJobRunnerTests
     }
 
     [Fact]
-    public async Task Recover_UsesConfiguredAttemptLimitAndSafeReason()
+    public async Task RunNextJob_ClaimsWithTheConfiguredLeaseAndAWorkerName()
     {
-        _repository.RecoveryResult = new InterruptedJobRecovery(Requeued: 1, Failed: 1);
+        var importService = new StubImportService(_ => Task.FromResult(new ImportResult()));
 
-        var runner = CreateRunner(new StubImportService(_ => throw new InvalidOperationException()));
+        await CreateRunner(importService).RunNextJobAsync(CancellationToken.None);
 
-        await runner.RecoverInterruptedJobsAsync(CancellationToken.None);
+        Assert.Equal(TimeSpan.FromSeconds(90), _repository.ClaimLease);
+        Assert.False(string.IsNullOrWhiteSpace(_repository.ClaimOwner));
+        Assert.InRange(_repository.ClaimOwner!.Length, 1, ImportLog.LeaseOwnerMaxLength);
+    }
 
-        Assert.Equal(3, _repository.RecoveryMaxAttempts);
-        Assert.Contains("interrupted too many times", _repository.RecoveryReason);
+    // The claim counts itself, so above the limit means MaxAttempts have already been used.
+    [Fact]
+    public async Task RunNextJob_WhenClaimExceedsTheFailureLimit_FailsWithoutImporting()
+    {
+        _repository.NextJob = CreateClaimedJob();
+        _repository.NextJob.ConsecutiveFailureCount = 4;
+        _repository.NextJob.ProcessedCount = 2000;
+        _repository.NextJob.CreatedCount = 2000;
+
+        var importService = new StubImportService(_ => throw new InvalidOperationException());
+
+        Assert.True(await CreateRunner(importService).RunNextJobAsync(CancellationToken.None));
+
+        Assert.Null(importService.ReceivedToken);
+        Assert.Equal(7, _repository.LastToken);
+        Assert.Equal(
+            (42, "The import was interrupted too many times and will not be retried. Lines 1 to 2000 were committed and remain applied. Processing stopped at line 2001."),
+            _repository.FailedJob);
+    }
+
+    [Fact]
+    public async Task RunNextJob_AtTheFailureLimit_StillRuns()
+    {
+        _repository.NextJob = CreateClaimedJob();
+        _repository.NextJob.ConsecutiveFailureCount = 3;
+
+        var importService = new StubImportService(_ => Task.FromResult(new ImportResult()));
+
+        await CreateRunner(importService).RunNextJobAsync(CancellationToken.None);
+
+        Assert.NotNull(importService.ReceivedToken);
+        Assert.Null(_repository.FailedJob);
+    }
+
+    // The new owner's job must not be changed by a worker reporting its own failure.
+    [Fact]
+    public async Task RunNextJob_WhenFailureFollowsAReclaim_LeavesTheNewOwnersJobAlone()
+    {
+        var runner = CreateRunnerThrowing(new InvalidOperationException(SecretText));
+
+        _repository.PersistedJob = CreateClaimedJob();
+        _repository.PersistedJob.FencingToken = 8;
+
+        Assert.True(await runner.RunNextJobAsync(CancellationToken.None));
+
+        Assert.Null(_repository.FailedJob);
+        Assert.Null(_repository.RequeuedJobId);
         Assert.Contains(_logger.Entries, e => e.Level == LogLevel.Warning);
     }
 
     [Fact]
-    public async Task Recover_WithNothingToRecover_DoesNotLogAWarning()
+    public async Task RunNextJob_OnFailureAndShutdown_UsesTheClaimsFencingToken()
     {
-        var runner = CreateRunner(new StubImportService(_ => throw new InvalidOperationException()));
+        await CreateRunnerThrowing(new InvalidOperationException(SecretText)).RunNextJobAsync(CancellationToken.None);
 
-        await runner.RecoverInterruptedJobsAsync(CancellationToken.None);
+        Assert.Equal(7, _repository.LastToken);
 
-        Assert.Empty(_logger.Entries);
+        using var stopping = new CancellationTokenSource();
+
+        await stopping.CancelAsync();
+
+        await CreateRunnerThrowing(new OperationCanceledException(stopping.Token)).RunNextJobAsync(stopping.Token);
+
+        Assert.Equal(42, _repository.ReleasedJobId);
+        Assert.Equal(7, _repository.LastToken);
     }
 }

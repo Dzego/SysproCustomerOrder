@@ -455,7 +455,7 @@ public sealed class ImportConstraintTests(SqlServerFixture fixture) : SqlServerT
         await using (var dbContext = CreateDbContext())
         {
             await new Syspro.Api.Repositories.ImportRepository(dbContext)
-                .ClaimNextPendingJobAsync(CancellationToken.None);
+                .ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
         }
 
         var job = await QueryAsync(context => context.ImportLogs.SingleAsync());

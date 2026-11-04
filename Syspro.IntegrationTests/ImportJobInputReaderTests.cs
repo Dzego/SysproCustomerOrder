@@ -80,6 +80,7 @@ public sealed class ImportJobInputReaderTests : SqlServerTestBase
             new CustomerImportService(new LegacyCustomerParser(), new CustomerRepository(dbContext), repository,
             TestData.ImportOptions()),
             Microsoft.Extensions.Options.Options.Create(new Syspro.Api.BackgroundJobs.CustomerImportWorkerOptions()),
+            TestData.ImportOptions(),
             new TestOutputLogger<CustomerImportJobRunner>(_output));
     }
 
@@ -87,17 +88,11 @@ public sealed class ImportJobInputReaderTests : SqlServerTestBase
     {
         var pending = await AddPendingJobAsync(input: input);
 
-        // These tests check the outcome, not the number of executions. A real connection
-        // failure requeues the job, and it then resumes, so run until nothing is waiting.
-        while (true)
-        {
-            await using var dbContext = CreateDbContext();
+        await using var dbContext = CreateDbContext();
 
-            if (!await CreateRunner(dbContext).RunNextJobAsync(CancellationToken.None))
-            {
-                break;
-            }
-        }
+        // One execution, so an unexpected retry fails here with its cause in the test
+        // output, instead of passing unnoticed. Retries have their own tests.
+        Assert.True(await CreateRunner(dbContext).RunNextJobAsync(CancellationToken.None));
 
         return await QueryAsync(context => context.ImportLogs.SingleAsync(x => x.Id == pending.Id));
     }
@@ -426,7 +421,7 @@ public sealed class ImportJobInputReaderTests : SqlServerTestBase
         {
             var repository = new ImportRepository(dbContext);
 
-            var claimed = await repository.ClaimNextPendingJobAsync(CancellationToken.None);
+            var claimed = await repository.ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
 
             await using var input = await repository.OpenJobInputAsync(claimed!.Id, CancellationToken.None);
 

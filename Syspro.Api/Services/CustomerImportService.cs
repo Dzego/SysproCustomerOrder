@@ -12,6 +12,7 @@ public class CustomerImportService : ICustomerImportService
     private readonly ICustomerRepository _customerRepository;
     private readonly IImportRepository _importRepository;
     private readonly int _batchSize;
+    private readonly TimeSpan _leaseDuration;
 
     public CustomerImportService(
         LegacyCustomerParser parser,
@@ -23,6 +24,7 @@ public class CustomerImportService : ICustomerImportService
         _customerRepository = customerRepository;
         _importRepository = importRepository;
         _batchSize = options.Value.BatchSize;
+        _leaseDuration = options.Value.LeaseDuration;
     }
 
     public async Task<ImportResult> ImportAsync(
@@ -159,6 +161,17 @@ public class CustomerImportService : ICustomerImportService
         await _importRepository.ExecuteInTransactionAsync(
             async token =>
             {
+                // Before anything else, so that a worker that has lost the job writes nothing,
+                // and a reclaim cannot happen until this batch has finished.
+                if (!await _importRepository.RenewLeaseAsync(
+                        importLog.Id,
+                        importLog.FencingToken,
+                        _leaseDuration,
+                        token))
+                {
+                    throw new ImportJobStateChangedException(importLog.Id);
+                }
+
                 var existing = await _customerRepository.GetByLegacyCustomerIdsAsync(
                     records.Select(record => record.LegacyCustomerId).ToList(),
                     token);
@@ -195,12 +208,13 @@ public class CustomerImportService : ICustomerImportService
 
                 var applied = await _importRepository.ApplyBatchProgressAsync(
                     importLog.Id,
+                    importLog.FencingToken,
                     importLog.ProcessedCount,
                     new ImportBatchProgress(lines.Count, created, updated, errors.Count),
                     isLastBatch,
                     token);
 
-                // Another execution has changed this job, so this batch must not apply.
+                // Another worker has changed this job, so this batch must not apply.
                 if (!applied)
                 {
                     throw new ImportJobStateChangedException(importLog.Id);

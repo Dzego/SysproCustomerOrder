@@ -140,6 +140,16 @@ namespace Syspro.Api.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<long>("FencingToken")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime?>("LeaseExpiresAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("LeaseOwner")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.Property<int>("ProcessedCount")
                         .HasColumnType("int");
 
@@ -147,7 +157,6 @@ namespace Syspro.Api.Migrations
                         .HasColumnType("datetime2");
 
                     b.Property<string>("Status")
-                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(20)
                         .IsUnicode(false)
@@ -158,11 +167,18 @@ namespace Syspro.Api.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("Status")
+                        .IsUnique()
+                        .HasDatabaseName("UX_ImportLogs_SingleProcessing")
+                        .HasFilter("[Status] = 'Processing'");
+
                     b.HasIndex("Status", "CreatedAt");
 
                     b.ToTable("ImportLogs", t =>
                         {
                             t.HasCheckConstraint("CK_ImportLogs_Counters", "[ProcessedCount] = [CreatedCount] + [UpdatedCount] + [FailedCount]");
+
+                            t.HasCheckConstraint("CK_ImportLogs_Lease", "([Status] = 'Processing' AND [LeaseOwner] IS NOT NULL AND [LeaseExpiresAt] IS NOT NULL)\nOR ([Status] <> 'Processing' AND [LeaseOwner] IS NULL AND [LeaseExpiresAt] IS NULL)");
 
                             t.HasCheckConstraint("CK_ImportLogs_Lifecycle", "([Status] = 'Pending' AND [StartedAt] IS NULL AND [CompletedAt] IS NULL AND [FailureReason] IS NULL)\nOR ([Status] = 'Processing' AND [StartedAt] IS NOT NULL AND [CompletedAt] IS NULL AND [FailureReason] IS NULL)\nOR ([Status] = 'Completed' AND [StartedAt] IS NOT NULL AND [CompletedAt] IS NOT NULL AND [FailureReason] IS NULL)\nOR ([Status] = 'Failed' AND [CompletedAt] IS NOT NULL AND [FailureReason] IS NOT NULL)");
 

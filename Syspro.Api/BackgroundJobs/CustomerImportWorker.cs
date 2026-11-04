@@ -4,9 +4,9 @@ using Syspro.Api.Services;
 
 namespace Syspro.Api.BackgroundJobs;
 
-// Finds work by polling SQL Server, so jobs survive restarts. Runs one job at a
-// time, and supports only one enabled instance: recovery treats every Processing
-// job as abandoned, which would be wrong if another worker were running it.
+// Finds work by polling SQL Server, so jobs survive restarts. Any number of instances can
+// run this: one holds a lease on the active job, and the others wait. A crashed worker's
+// job is picked up once its lease expires, so there is no recovery step at startup.
 public sealed class CustomerImportWorker : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
@@ -39,8 +39,6 @@ public sealed class CustomerImportWorker : BackgroundService
             "Customer import worker started, polling every {PollInterval}",
             _options.PollInterval);
 
-        var recoveryRequired = true;
-
         while (!stoppingToken.IsCancellationRequested)
         {
             var ranJob = false;
@@ -52,13 +50,6 @@ public sealed class CustomerImportWorker : BackgroundService
 
                 var runner = scope.ServiceProvider.GetRequiredService<ICustomerImportJobRunner>();
 
-                if (recoveryRequired)
-                {
-                    await runner.RecoverInterruptedJobsAsync(stoppingToken);
-
-                    recoveryRequired = false;
-                }
-
                 ranJob = await runner.RunNextJobAsync(stoppingToken);
             }
             catch (Exception exception) when (
@@ -69,15 +60,12 @@ public sealed class CustomerImportWorker : BackgroundService
             }
             catch (Exception exception)
             {
-                // Letting this escape would stop the whole host. A job may have been
-                // left Processing, for example if the database went down, and this
-                // worker is now idle, so recovering it next time is safe.
+                // Letting this escape would stop the whole host. A job left Processing, for
+                // example if the database went down, is picked up when its lease expires.
                 _logger.LogError(
                     exception,
                     "Customer import worker cycle failed. Retrying in {PollInterval}",
                     _options.PollInterval);
-
-                recoveryRequired = true;
             }
 
             // Runs the next job straight away while work is queued.

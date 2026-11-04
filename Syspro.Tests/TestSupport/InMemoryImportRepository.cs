@@ -41,8 +41,18 @@ public sealed class InMemoryImportRepository(AppDbContext dbContext) : IImportRe
         dbContext.ImportErrors.AddRange(errors);
     }
 
+    public Task<bool> RenewLeaseAsync(
+        int id,
+        long fencingToken,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken)
+    {
+        return Task.FromResult(true);
+    }
+
     public async Task<bool> ApplyBatchProgressAsync(
         int id,
+        long fencingToken,
         int expectedProcessedCount,
         ImportBatchProgress progress,
         bool completeJob,
@@ -81,16 +91,11 @@ public sealed class InMemoryImportRepository(AppDbContext dbContext) : IImportRe
 
     public Task<Stream?> OpenJobInputAsync(int id, CancellationToken cancellationToken) => throw new NotSupportedException();
 
-    public Task<ImportLog?> ClaimNextPendingJobAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+    public Task<ImportLog?> ClaimNextJobAsync(string leaseOwner, TimeSpan leaseDuration, CancellationToken cancellationToken) => throw new NotSupportedException();
 
-    public Task ReleaseJobAsync(int id, CancellationToken cancellationToken) => throw new NotSupportedException();
+    public Task ReleaseJobAsync(int id, long fencingToken, CancellationToken cancellationToken) => throw new NotSupportedException();
 
-    public Task RequeueJobAsync(int id, CancellationToken cancellationToken) => throw new NotSupportedException();
+    public Task RequeueJobAsync(int id, long fencingToken, CancellationToken cancellationToken) => throw new NotSupportedException();
 
-    public Task MarkJobFailedAsync(int id, string reason, CancellationToken cancellationToken) => throw new NotSupportedException();
-
-    public Task<InterruptedJobRecovery> RecoverInterruptedJobsAsync(
-        int maxAttempts,
-        string exhaustedReason,
-        CancellationToken cancellationToken) => throw new NotSupportedException();
+    public Task MarkJobFailedAsync(int id, long fencingToken, string reason, CancellationToken cancellationToken) => throw new NotSupportedException();
 }

@@ -3,7 +3,6 @@ using System.Text;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Syspro.Api.BackgroundJobs;
 using Syspro.Api.Data;
@@ -48,7 +47,8 @@ public sealed class ImportBatchTests : SqlServerTestBase
             repository,
             CreateService(dbContext, batchSize),
             Options.Create(new CustomerImportWorkerOptions { MaxAttempts = MaxAttempts }),
-            NullLogger<CustomerImportJobRunner>.Instance);
+            TestData.ImportOptions(batchSize),
+            new TestOutputLogger<CustomerImportJobRunner>(_output));
     }
 
     private static CustomerImportService CreateService(AppDbContext dbContext, int batchSize = BatchSize)
@@ -69,10 +69,7 @@ public sealed class ImportBatchTests : SqlServerTestBase
 
     private async Task RunUntilIdleAsync(int batchSize = BatchSize)
     {
-        await using (var dbContext = CreateDbContext())
-        {
-            await CreateRunner(dbContext, batchSize).RecoverInterruptedJobsAsync(CancellationToken.None);
-        }
+        await ExpireLeasesAsync();
 
         while (await RunNextJobAsync(batchSize))
         {
@@ -86,7 +83,7 @@ public sealed class ImportBatchTests : SqlServerTestBase
 
         var repository = new ImportRepository(dbContext);
 
-        var job = await repository.ClaimNextPendingJobAsync(CancellationToken.None);
+        var job = await repository.ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
 
         await using var input = await repository.OpenJobInputAsync(job!.Id, CancellationToken.None);
 
@@ -637,13 +634,13 @@ public sealed class ImportBatchTests : SqlServerTestBase
 
         var repository = new ImportRepository(dbContext);
 
-        await repository.ClaimNextPendingJobAsync(CancellationToken.None);
+        var claim = await repository.ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
 
         Assert.True(await repository.ApplyBatchProgressAsync(
-            pending.Id, 0, new ImportBatchProgress(1, 1, 0, 0), completeJob: false, CancellationToken.None));
+            pending.Id, claim!.FencingToken, 0, new ImportBatchProgress(1, 1, 0, 0), completeJob: false, CancellationToken.None));
 
         Assert.False(await repository.ApplyBatchProgressAsync(
-            pending.Id, 0, new ImportBatchProgress(1, 1, 0, 0), completeJob: false, CancellationToken.None));
+            pending.Id, claim.FencingToken, 0, new ImportBatchProgress(1, 1, 0, 0), completeJob: false, CancellationToken.None));
 
         Assert.Equal(1, (await GetJobAsync(pending.Id)).ProcessedCount);
     }

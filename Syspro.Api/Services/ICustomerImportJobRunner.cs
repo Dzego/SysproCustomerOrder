@@ -2,8 +2,6 @@ namespace Syspro.Api.Services;
 
 public interface ICustomerImportJobRunner
 {
-    Task RecoverInterruptedJobsAsync(CancellationToken stoppingToken);
-
-    // Returns false when no job was waiting.
+    // Returns false when no job could be claimed.
     Task<bool> RunNextJobAsync(CancellationToken stoppingToken);
 }

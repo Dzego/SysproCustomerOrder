@@ -30,6 +30,9 @@ builder.Services.AddOptions<CustomerImportOptions>()
     .Validate(
         options => options.HasValidBatchSize,
         "CustomerImport:BatchSize must be above zero and at most 10,000.")
+    .Validate(
+        options => options.HasValidLeaseDuration,
+        "CustomerImport:LeaseDuration must be above zero and at most one hour.")
     .ValidateOnStart();
 builder.Services.AddOptions<CustomerImportWorkerOptions>()
     .Bind(builder.Configuration.GetSection(CustomerImportWorkerOptions.SectionName))

@@ -60,6 +60,15 @@ public abstract class SqlServerTestBase : IAsyncLifetime
         return await query(dbContext);
     }
 
+    // Makes every lease out of date without waiting, as if its worker had stopped renewing.
+    protected async Task ExpireLeasesAsync()
+    {
+        await using var dbContext = CreateDbContext();
+
+        await dbContext.Database.ExecuteSqlAsync(
+            $"UPDATE [ImportLogs] SET [LeaseExpiresAt] = DATEADD(second, -1, SYSUTCDATETIME()) WHERE [Status] = 'Processing'");
+    }
+
     protected async Task<ImportLog> AddPendingJobAsync(DateTime? createdAt = null, byte[]? input = null)
     {
         await using var dbContext = CreateDbContext();

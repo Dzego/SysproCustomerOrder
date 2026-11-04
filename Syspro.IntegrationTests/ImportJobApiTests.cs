@@ -324,6 +324,10 @@ public sealed class ImportJobApiTests(SqlServerFixture fixture) : SqlServerTestB
                 CreatedAt = now,
                 StartedAt = now,
                 AttemptCount = 1,
+                ConsecutiveFailureCount = 1,
+                FencingToken = 1,
+                LeaseOwner = "crashed-worker",
+                LeaseExpiresAt = now.AddMinutes(-1),
                 Input = new ImportJobInput { Content = TestData.ToInput(TestData.LegacyLine()) }
             };
 

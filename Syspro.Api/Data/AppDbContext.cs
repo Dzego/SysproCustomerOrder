@@ -130,13 +130,16 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
 
         importLog.HasKey(x => x.Id);
 
-        // A concurrency token, so that committing a job fails if its status was
-        // changed by anything else after it was claimed.
         importLog.Property(x => x.Status)
             .HasConversion<string>()
             .HasMaxLength(20)
-            .IsUnicode(false)
-            .IsConcurrencyToken();
+            .IsUnicode(false);
+
+        importLog.Property(x => x.LeaseOwner)
+            .HasMaxLength(ImportLog.LeaseOwnerMaxLength);
+
+        importLog.Property(x => x.LeaseExpiresAt)
+            .HasColumnType("datetime2");
 
         importLog.Property(x => x.CreatedAt)
             .HasColumnType("datetime2");
@@ -147,8 +150,21 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
         // Supports the worker's search for the oldest pending job.
         importLog.HasIndex(x => new { x.Status, x.CreatedAt });
 
+        // At most one job can be Processing, however many workers are running.
+        importLog.HasIndex(x => x.Status)
+            .IsUnique()
+            .HasFilter("[Status] = 'Processing'")
+            .HasDatabaseName("UX_ImportLogs_SingleProcessing");
+
         importLog.ToTable(table =>
         {
+            table.HasCheckConstraint(
+                "CK_ImportLogs_Lease",
+                """
+                ([Status] = 'Processing' AND [LeaseOwner] IS NOT NULL AND [LeaseExpiresAt] IS NOT NULL)
+                OR ([Status] <> 'Processing' AND [LeaseOwner] IS NULL AND [LeaseExpiresAt] IS NULL)
+                """);
+
             table.HasCheckConstraint(
                 "CK_ImportLogs_Counters",
                 "[ProcessedCount] = [CreatedCount] + [UpdatedCount] + [FailedCount]");

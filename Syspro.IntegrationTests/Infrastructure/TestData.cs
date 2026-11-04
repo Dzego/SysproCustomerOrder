@@ -90,11 +90,12 @@ public static class TestData
                tier.PadRight(2);
     }
 
-    public static IOptions<CustomerImportOptions> ImportOptions(int? batchSize = null)
+    public static IOptions<CustomerImportOptions> ImportOptions(int? batchSize = null, TimeSpan? leaseDuration = null)
     {
         var options = new CustomerImportOptions();
 
         options.BatchSize = batchSize ?? options.BatchSize;
+        options.LeaseDuration = leaseDuration ?? options.LeaseDuration;
 
         return Options.Create(options);
     }

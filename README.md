@@ -411,7 +411,7 @@ This gives each line's database changes **at most one commit per job, not exactl
 | Client disconnects after `202 Accepted` | The job is unaffected |
 | API stops or restarts with jobs `Pending` | They run after the restart |
 | Graceful shutdown during an import | The batch in progress rolls back and the job returns to `Pending`, not counted as a failure. It resumes after restart |
-| Crash during an import | The job is left `Processing`, requeued at the next startup, and resumes |
+| Crash during an import | The job stays `Processing` until its lease expires, then a worker reclaims it and it resumes |
 | Temporary database failure, such as a deadlock, timeout or lost connection | The batch rolls back and the job retries from its checkpoint |
 | `MaxAttempts` executions in a row with no batch committed | The job becomes `Failed`, which stops a job that crashes the process or keeps failing from looping forever |
 | Any other failure in a batch | That batch rolls back and the job becomes `Failed`. Earlier batches remain applied. Send a new request to try again |
@@ -440,23 +440,21 @@ The `AddImportCountersAndRetryTracking` migration checks existing rows against t
 
 `PollInterval` must be above zero and at most five minutes. A new job can wait up to one interval before it starts.
 
-## Deployment Restriction: One Enabled Worker
+## Multiple Instances
 
-**Exactly one running instance may have `CustomerImportWorker:Enabled` set to `true`. Nothing enforces this, so it is a deployment responsibility.** Instances with the worker disabled still accept jobs and report their status.
+Any number of API instances can run with the worker enabled. Only one import job runs at a time across all of them, in the order the jobs were accepted, and the others wait. This keeps results predictable, because import order decides each customer's final data.
 
-| Deployment | What to do |
-| --- | --- |
-| One API instance | No action needed, unless deployments overlap |
-| Several API instances, autoscaling or Kubernetes replicas | Set `Enabled` to `false` everywhere except one fixed instance |
-| Rolling or blue-green deployment | Old and new instances must not both have the worker enabled. Stop the old worker before starting the new one |
+- **Claiming:** one atomic SQL statement picks the next job, and a unique index allows only one `Processing` job.
+- **Leases:** the claiming worker holds a lease, timed by the SQL Server clock so that clock differences between servers do not matter. Each batch renews it.
+- **Crashes:** another worker takes over once the lease expires, after `LeaseDuration` at most plus one poll, and resumes from the checkpoint.
+- **Graceful shutdown:** the job is released at once, so another worker can continue straight away.
+- **Fencing:** every claim raises the job's `FencingToken`. Each batch checks it first, and so does every other change to the job. A worker whose job was reclaimed holds an old token, so it stops without writing anything.
 
-Claiming is atomic, so two workers cannot claim the same `Pending` job. Recovery is the unsafe part: at startup it treats every `Processing` job as abandoned, and has no leases or heartbeats to tell an abandoned job from one that another worker is running. If a second worker starts:
+If a batch is committing when its lease runs out, it still succeeds, because it holds the job's row and its token is still current. The reclaim waits for that commit and then resumes after it. This keeps a job from running on two workers at once in a way that can apply the same line twice, though a slow worker's in-progress work can be thrown away.
 
-- It requeues the running job, so the first worker's work is rejected at commit and wasted.
-- Both workers can run the same job at once. Only one commits, so customers are not duplicated, but the attempt count no longer reflects what happened.
-- It can permanently mark a healthy running job as `Failed` once the attempt limit is reached.
+`LeaseDuration` should be well above the time one batch takes. Too short a lease does not lose data, but healthy workers lose their jobs and repeat work.
 
-A concurrency check on `Status` prevents a second commit in the cases tested, but it is a safeguard and does not make several workers supported.
+A rolling or blue-green deployment is safe once every instance runs this version. **Moving to this version from an earlier one is not:** stop every worker on the old version before applying the `AddImportJobLeasing` migration. The migration returns any `Processing` job to `Pending`, and the old code's claims are then rejected by the database.
 
 ## Job Input Snapshot
 
@@ -489,13 +487,14 @@ No scheduled cleanup is needed, because a finished job removes its own input. Re
 ```json
 "CustomerImport": {
   "MaxInputBytes": 52428800,
-  "BatchSize": 1000
+  "BatchSize": 1000,
+  "LeaseDuration": "00:02:00"
 }
 ```
 
 The default is 50 MiB, and the maximum allowed setting is 1 GiB. A larger file returns `413 Payload Too Large` and creates no job. The whole file is held in memory while it is accepted. The worker reads it back from SQL Server in 1 MiB chunks and tracks one batch at a time. It also keeps every `LegacyCustomerId` seen so far in memory to detect duplicates, so its memory use still grows with the number of customers in the file.
 
-`BatchSize` must be between 1 and 10,000. Larger batches hold locks for longer.
+`BatchSize` must be between 1 and 10,000. Larger batches hold locks for longer. `LeaseDuration` must be above zero and at most one hour.
 
 --- | --- |
 | Is replaced before the job runs | The job imports the new content, not what was there when it was accepted |

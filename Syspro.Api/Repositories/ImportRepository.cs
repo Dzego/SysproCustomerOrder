@@ -51,8 +51,29 @@ public class ImportRepository : IImportRepository
         _dbContext.ImportErrors.AddRange(errors);
     }
 
+    public async Task<bool> RenewLeaseAsync(
+        int id,
+        long fencingToken,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken)
+    {
+        var leaseMilliseconds = (int)leaseDuration.TotalMilliseconds;
+
+        // Uses the database clock, so that clock differences between servers do not matter.
+        var updated = await _dbContext.Database.ExecuteSqlAsync(
+            $"""
+             UPDATE [ImportLogs]
+             SET [LeaseExpiresAt] = DATEADD(millisecond, {leaseMilliseconds}, SYSUTCDATETIME())
+             WHERE [Id] = {id} AND [FencingToken] = {fencingToken} AND [Status] = 'Processing'
+             """,
+            cancellationToken);
+
+        return updated == 1;
+    }
+
     public async Task<bool> ApplyBatchProgressAsync(
         int id,
+        long fencingToken,
         int expectedProcessedCount,
         ImportBatchProgress progress,
         bool completeJob,
@@ -61,11 +82,8 @@ public class ImportRepository : IImportRepository
         var status = completeJob ? ImportJobStatus.Completed : ImportJobStatus.Processing;
         DateTime? completedAt = completeJob ? DateTime.UtcNow : null;
 
-        var updated = await _dbContext.ImportLogs
-            .Where(job =>
-                job.Id == id &&
-                job.Status == ImportJobStatus.Processing &&
-                job.ProcessedCount == expectedProcessedCount)
+        var updated = await OwnedJob(id, fencingToken)
+            .Where(job => job.ProcessedCount == expectedProcessedCount)
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(job => job.ProcessedCount, job => job.ProcessedCount + progress.Processed)
@@ -74,10 +92,20 @@ public class ImportRepository : IImportRepository
                     .SetProperty(job => job.FailedCount, job => job.FailedCount + progress.Failed)
                     .SetProperty(job => job.ConsecutiveFailureCount, 0)
                     .SetProperty(job => job.Status, status)
-                    .SetProperty(job => job.CompletedAt, completedAt),
+                    .SetProperty(job => job.CompletedAt, completedAt)
+                    .SetProperty(job => job.LeaseOwner, job => completeJob ? null : job.LeaseOwner)
+                    .SetProperty(job => job.LeaseExpiresAt, job => completeJob ? null : job.LeaseExpiresAt),
                 cancellationToken);
 
         return updated == 1;
+    }
+
+    private IQueryable<ImportLog> OwnedJob(int id, long fencingToken)
+    {
+        return _dbContext.ImportLogs.Where(job =>
+            job.Id == id &&
+            job.FencingToken == fencingToken &&
+            job.Status == ImportJobStatus.Processing);
     }
 
     public Task<ImportLog?> GetJobAsync(int id, CancellationToken cancellationToken)
@@ -170,120 +198,93 @@ public class ImportRepository : IImportRepository
         _dbContext.ImportJobInputs.Remove(new ImportJobInput { ImportLogId = id, Content = [] });
     }
 
-    public async Task<ImportLog?> ClaimNextPendingJobAsync(CancellationToken cancellationToken)
+    public async Task<ImportLog?> ClaimNextJobAsync(
+        string leaseOwner,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken)
     {
-        var candidateId = await _dbContext.ImportLogs
-            .Where(job => job.Status == ImportJobStatus.Pending)
-            .OrderBy(job => job.CreatedAt)
-            .ThenBy(job => job.Id)
-            .Select(job => (int?)job.Id)
-            .FirstOrDefaultAsync(cancellationToken);
+        var leaseMilliseconds = (int)leaseDuration.TotalMilliseconds;
 
-        if (candidateId is null)
-        {
-            return null;
-        }
-
-        // The status check makes this atomic: only one caller can update the row.
-        var now = DateTime.UtcNow;
-
+        // One statement, so it is atomic. The locks serialize concurrent claims, and they
+        // also make a reclaim wait for a batch that holds the job's row. The candidate is
+        // always the Processing job if there is one, so a live lease stops anything else
+        // from starting, which keeps jobs in order.
         var claimed = await _dbContext.ImportLogs
-            .Where(job => job.Id == candidateId && job.Status == ImportJobStatus.Pending)
-            .ExecuteUpdateAsync(
-                setters => setters
-                    .SetProperty(job => job.Status, ImportJobStatus.Processing)
-                    .SetProperty(job => job.StartedAt, now)
-                    .SetProperty(job => job.AttemptCount, job => job.AttemptCount + 1)
-                    .SetProperty(job => job.ConsecutiveFailureCount, job => job.ConsecutiveFailureCount + 1),
-                cancellationToken);
-
-        if (claimed == 0)
-        {
-            return null;
-        }
-
-        return await _dbContext.ImportLogs
+            .FromSql(
+                $"""
+                 WITH [Candidate] AS (
+                     SELECT TOP (1) *
+                     FROM [ImportLogs] WITH (UPDLOCK, ROWLOCK, HOLDLOCK)
+                     WHERE [Status] IN ('Processing', 'Pending')
+                     ORDER BY CASE WHEN [Status] = 'Processing' THEN 0 ELSE 1 END, [CreatedAt], [Id]
+                 )
+                 UPDATE [Candidate]
+                 SET [Status] = 'Processing',
+                     [LeaseOwner] = {leaseOwner},
+                     [LeaseExpiresAt] = DATEADD(millisecond, {leaseMilliseconds}, SYSUTCDATETIME()),
+                     [FencingToken] = [FencingToken] + 1,
+                     [AttemptCount] = [AttemptCount] + 1,
+                     [ConsecutiveFailureCount] = [ConsecutiveFailureCount] + 1,
+                     [StartedAt] = SYSUTCDATETIME()
+                 OUTPUT inserted.*
+                 WHERE [Status] = 'Pending' OR [LeaseExpiresAt] < SYSUTCDATETIME()
+                 """)
             .AsNoTracking()
-            .SingleAsync(job => job.Id == candidateId, cancellationToken);
+            .ToListAsync(cancellationToken);
+
+        return claimed.SingleOrDefault();
     }
 
-    public Task ReleaseJobAsync(int id, CancellationToken cancellationToken)
+    public Task ReleaseJobAsync(int id, long fencingToken, CancellationToken cancellationToken)
     {
-        return _dbContext.ImportLogs
-            .Where(job => job.Id == id && job.Status == ImportJobStatus.Processing)
+        return OwnedJob(id, fencingToken)
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(job => job.Status, ImportJobStatus.Pending)
                     .SetProperty(job => job.StartedAt, (DateTime?)null)
+                    .SetProperty(job => job.LeaseOwner, (string?)null)
+                    .SetProperty(job => job.LeaseExpiresAt, (DateTime?)null)
                     .SetProperty(
                         job => job.ConsecutiveFailureCount,
                         job => job.ConsecutiveFailureCount > 0 ? job.ConsecutiveFailureCount - 1 : 0),
                 cancellationToken);
     }
 
-    public Task RequeueJobAsync(int id, CancellationToken cancellationToken)
+    public Task RequeueJobAsync(int id, long fencingToken, CancellationToken cancellationToken)
     {
-        return _dbContext.ImportLogs
-            .Where(job => job.Id == id && job.Status == ImportJobStatus.Processing)
+        return OwnedJob(id, fencingToken)
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(job => job.Status, ImportJobStatus.Pending)
-                    .SetProperty(job => job.StartedAt, (DateTime?)null),
+                    .SetProperty(job => job.StartedAt, (DateTime?)null)
+                    .SetProperty(job => job.LeaseOwner, (string?)null)
+                    .SetProperty(job => job.LeaseExpiresAt, (DateTime?)null),
                 cancellationToken);
     }
 
-    public async Task MarkJobFailedAsync(int id, string reason, CancellationToken cancellationToken)
-    {
-        var now = DateTime.UtcNow;
-
-        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
-
-        await _dbContext.ImportLogs
-            .Where(job => job.Id == id && job.Status == ImportJobStatus.Processing)
-            .ExecuteUpdateAsync(
-                setters => setters
-                    .SetProperty(job => job.Status, ImportJobStatus.Failed)
-                    .SetProperty(job => job.CompletedAt, now)
-                    .SetProperty(job => job.FailureReason, reason),
-                cancellationToken);
-
-        await DeleteFinishedJobInputsAsync(cancellationToken);
-
-        await transaction.CommitAsync(cancellationToken);
-    }
-
-    public async Task<InterruptedJobRecovery> RecoverInterruptedJobsAsync(
-        int maxAttempts,
-        string exhaustedReason,
+    public async Task MarkJobFailedAsync(
+        int id,
+        long fencingToken,
+        string reason,
         CancellationToken cancellationToken)
     {
         var now = DateTime.UtcNow;
 
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
 
-        // Runs first so that exhausted jobs are not requeued by the next statement.
-        var failed = await _dbContext.ImportLogs
-            .Where(job => job.Status == ImportJobStatus.Processing && job.ConsecutiveFailureCount >= maxAttempts)
+        await OwnedJob(id, fencingToken)
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(job => job.Status, ImportJobStatus.Failed)
                     .SetProperty(job => job.CompletedAt, now)
-                    .SetProperty(job => job.FailureReason, exhaustedReason),
-                cancellationToken);
-
-        var requeued = await _dbContext.ImportLogs
-            .Where(job => job.Status == ImportJobStatus.Processing)
-            .ExecuteUpdateAsync(
-                setters => setters
-                    .SetProperty(job => job.Status, ImportJobStatus.Pending)
-                    .SetProperty(job => job.StartedAt, (DateTime?)null),
+                    .SetProperty(job => job.FailureReason, reason)
+                    .SetProperty(job => job.LeaseOwner, (string?)null)
+                    .SetProperty(job => job.LeaseExpiresAt, (DateTime?)null),
                 cancellationToken);
 
         await DeleteFinishedJobInputsAsync(cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
-
-        return new InterruptedJobRecovery(requeued, failed);
     }
 
     // Selects by status, so this can never remove the input of a job that may still run.

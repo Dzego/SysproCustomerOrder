@@ -60,10 +60,27 @@ public sealed class SignalOnQueryInterceptor(
 }
 
 // Runs an action just before the first UPDATE, which lets a test place a competing
-// worker in the gap between another worker's read and its update.
+// worker immediately ahead of another worker's update.
 public sealed class BeforeFirstUpdateInterceptor(Func<Task> action) : DbCommandInterceptor
 {
     private bool _hasRun;
+
+    // A claim is one statement that returns the claimed row, so it runs as a reader.
+    public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_hasRun && command.CommandText.Contains("UPDATE", StringComparison.OrdinalIgnoreCase))
+        {
+            _hasRun = true;
+
+            await action();
+        }
+
+        return await base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+    }
 
     public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
         DbCommand command,
@@ -287,5 +304,56 @@ public sealed class TrackedEntityRecorder : SaveChangesInterceptor
         MaxTracked = Math.Max(MaxTracked, eventData.Context!.ChangeTracker.Entries().Count());
 
         return base.SavedChangesAsync(eventData, result, cancellationToken);
+    }
+}
+
+// Runs an action straight after a chosen commit, when the batch is durable and its row lock
+// has been released. It places another worker between two batches of this one.
+public sealed class AfterCommitInterceptor(int commitNumber, Func<Task> action) : DbTransactionInterceptor
+{
+    private int _commits;
+
+    public override async Task TransactionCommittedAsync(
+        DbTransaction transaction,
+        TransactionEndEventData eventData,
+        CancellationToken cancellationToken = default)
+    {
+        if (++_commits == commitNumber)
+        {
+            await action();
+        }
+
+        await base.TransactionCommittedAsync(transaction, eventData, cancellationToken);
+    }
+}
+
+// Holds a chosen save open until a test releases it. By then the batch's fence has run, so
+// its transaction holds the job's row, which lets a test place another worker behind it.
+public sealed class PauseOnSaveInterceptor(int saveNumber) : SaveChangesInterceptor
+{
+    private readonly TaskCompletionSource _reached = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _saves;
+
+    public Task Reached => _reached.Task;
+
+    public void Release()
+    {
+        _release.TrySetResult();
+    }
+
+    public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+        DbContextEventData eventData,
+        InterceptionResult<int> result,
+        CancellationToken cancellationToken = default)
+    {
+        if (++_saves == saveNumber)
+        {
+            _reached.TrySetResult();
+
+            await _release.Task;
+        }
+
+        return await base.SavingChangesAsync(eventData, result, cancellationToken);
     }
 }

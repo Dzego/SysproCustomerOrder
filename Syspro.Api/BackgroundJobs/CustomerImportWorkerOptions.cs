@@ -6,8 +6,7 @@ public sealed class CustomerImportWorkerOptions
 
     private static readonly TimeSpan MaxPollInterval = TimeSpan.FromMinutes(5);
 
-    // Must be true on only one running instance, including while deployments overlap.
-    // Nothing enforces this. See "Deployment Restriction" in the README.
+    // Instances with this off still accept jobs and report status, but never process them.
     public bool Enabled { get; set; } = true;
 
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(5);

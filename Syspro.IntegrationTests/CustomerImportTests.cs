@@ -26,7 +26,7 @@ public sealed class CustomerImportTests(SqlServerFixture fixture) : SqlServerTes
 
     private static async Task<ImportLog> ClaimJobAsync(AppDbContext dbContext)
     {
-        var job = await new ImportRepository(dbContext).ClaimNextPendingJobAsync(CancellationToken.None);
+        var job = await new ImportRepository(dbContext).ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
 
         Assert.NotNull(job);
 

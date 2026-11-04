@@ -31,17 +31,11 @@ public sealed class CustomerImportWorkerTests : IAsyncDisposable
     {
         private readonly Queue<Func<CancellationToken, Task<bool>>> _runs = new();
 
-        public Queue<Exception> RecoveryFailures { get; } = new();
-
-        public int RecoveryCount { get; private set; }
-
         public int RunCount { get; private set; }
 
         // Fixed when the script ends, because a worker with a short poll interval
         // can keep calling until the test stops it.
         public int RunCountAtIdle { get; private set; }
-
-        public int RecoveryCountAtIdle { get; private set; }
 
         public TaskCompletionSource Idle { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -59,15 +53,6 @@ public sealed class CustomerImportWorkerTests : IAsyncDisposable
             }
         }
 
-        public Task RecoverInterruptedJobsAsync(CancellationToken stoppingToken)
-        {
-            RecoveryCount++;
-
-            return RecoveryFailures.TryDequeue(out var failure)
-                ? Task.FromException(failure)
-                : Task.CompletedTask;
-        }
-
         public Task<bool> RunNextJobAsync(CancellationToken stoppingToken)
         {
             RunCount++;
@@ -81,7 +66,6 @@ public sealed class CustomerImportWorkerTests : IAsyncDisposable
             if (!Idle.Task.IsCompleted)
             {
                 RunCountAtIdle = RunCount;
-                RecoveryCountAtIdle = RecoveryCount;
                 Idle.TrySetResult();
             }
 
@@ -124,24 +108,6 @@ public sealed class CustomerImportWorkerTests : IAsyncDisposable
         await worker.StopAsync(CancellationToken.None).WaitAsync(TestTimeout);
     }
 
-    [Fact]
-    public async Task Worker_RecoversOnceBeforeRunningAnyJob()
-    {
-        var recoveredBeforeFirstRun = false;
-
-        _runner.ThenRun(_ =>
-        {
-            recoveredBeforeFirstRun = _runner.RecoveryCount == 1;
-
-            return Task.FromResult(true);
-        });
-
-        await RunUntilIdleAsync(CreateWorker(NeverPolls));
-
-        Assert.True(recoveredBeforeFirstRun);
-        Assert.Equal(1, _runner.RecoveryCount);
-    }
-
     // The fourth call finds nothing, and the worker then waits rather than spinning.
     [Fact]
     public async Task Worker_RunsQueuedJobsWithoutDelayThenWaitsWithoutBusyLooping()
@@ -176,7 +142,7 @@ public sealed class CustomerImportWorkerTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Worker_WhenCycleFails_SurvivesLogsErrorAndRecoversAgain()
+    public async Task Worker_WhenCycleFails_SurvivesLogsErrorAndPollsAgain()
     {
         var failure = new InvalidOperationException("Database unavailable.");
 
@@ -185,20 +151,21 @@ public sealed class CustomerImportWorkerTests : IAsyncDisposable
         await RunUntilIdleAsync(CreateWorker(TimeSpan.FromMilliseconds(1)));
 
         Assert.Equal(2, _runner.RunCountAtIdle);
-        Assert.Equal(2, _runner.RecoveryCountAtIdle);
         Assert.Same(failure, Assert.Single(_logger.Entries, e => e.Level == LogLevel.Error).Exception);
     }
 
     // The database may not be reachable yet when the application starts.
     [Fact]
-    public async Task Worker_WhenRecoveryFails_DoesNotRunJobsUntilItSucceeds()
+    public async Task Worker_WhenTheDatabaseIsUnavailableAtStartup_KeepsPolling()
     {
-        _runner.RecoveryFailures.Enqueue(new InvalidOperationException("Database unavailable."));
+        var failure = new InvalidOperationException("Database unavailable.");
+
+        _runner.ThenRun(_ => Task.FromException<bool>(failure));
+        _runner.ThenRun(_ => Task.FromException<bool>(failure));
 
         await RunUntilIdleAsync(CreateWorker(TimeSpan.FromMilliseconds(1)));
 
-        Assert.Equal(2, _runner.RecoveryCountAtIdle);
-        Assert.Equal(1, _runner.RunCountAtIdle);
+        Assert.Equal(3, _runner.RunCountAtIdle);
     }
 
     [Fact]
@@ -241,8 +208,20 @@ public sealed class CustomerImportWorkerTests : IAsyncDisposable
         await worker.StartAsync(CancellationToken.None);
         await worker.StopAsync(CancellationToken.None).WaitAsync(TestTimeout);
 
-        Assert.Equal(0, _runner.RecoveryCount);
         Assert.Equal(0, _runner.RunCount);
+    }
+
+    [Theory]
+    [InlineData("00:00:00", false)]
+    [InlineData("-00:00:01", false)]
+    [InlineData("00:00:00.001", true)]
+    [InlineData("01:00:00", true)]
+    [InlineData("01:00:01", false)]
+    public void LeaseDuration_IsBounded(string leaseDuration, bool expected)
+    {
+        var options = new CustomerImportOptions { LeaseDuration = TimeSpan.Parse(leaseDuration) };
+
+        Assert.Equal(expected, options.HasValidLeaseDuration);
     }
 
     [Theory]

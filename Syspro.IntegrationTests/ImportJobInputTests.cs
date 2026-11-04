@@ -262,12 +262,14 @@ public sealed class ImportJobInputTests : SqlServerTestBase
 
         await using (var crashed = CreateDbContext())
         {
-            Assert.NotNull(await new ImportRepository(crashed).ClaimNextPendingJobAsync(CancellationToken.None));
+            Assert.NotNull(await new ImportRepository(crashed).ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None));
         }
 
         Assert.Equal(ImportJobStatus.Processing, (await GetOnlyJobAsync()).Status);
 
         await WriteLegacyFileAsync(ReplacementLine);
+
+        await ExpireLeasesAsync();
 
         var job = await RunUntilFinishedAsync(location);
 
@@ -404,11 +406,11 @@ public sealed class ImportJobInputTests : SqlServerTestBase
         {
             var repository = new ImportRepository(dbContext);
 
-            var claimed = await repository.ClaimNextPendingJobAsync(CancellationToken.None);
+            var claimed = await repository.ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
 
             Assert.Equal(finished.Id, claimed!.Id);
 
-            await repository.MarkJobFailedAsync(claimed.Id, "Reason", CancellationToken.None);
+            await repository.MarkJobFailedAsync(claimed.Id, claimed.FencingToken, "Reason", CancellationToken.None);
         }
 
         var remaining = await QueryAsync(context => context.ImportJobInputs.SingleAsync());
@@ -417,26 +419,32 @@ public sealed class ImportJobInputTests : SqlServerTestBase
         Assert.Equal(TestData.ToInput(ReplacementLine), remaining.Content);
     }
 
-    // A Processing job left by a crash still needs its input for the retry.
+    // The active job still needs its input for a retry, whatever cleanup runs meanwhile.
     [SqlServerFact]
-    public async Task FinishingOneJob_LeavesTheInputOfAnotherProcessingJob()
+    public async Task CleanupRunningDuringAnotherJob_LeavesTheActiveJobsInput()
     {
         var finished = await AddPendingJobAsync(new DateTime(2026, 1, 1), TestData.ToInput(AcceptedLine));
-        var interrupted = await AddPendingJobAsync(new DateTime(2026, 1, 2), TestData.ToInput(ReplacementLine));
+        var active = await AddPendingJobAsync(new DateTime(2026, 1, 2), TestData.ToInput(ReplacementLine));
 
         await using (var dbContext = CreateDbContext())
         {
             var repository = new ImportRepository(dbContext);
 
-            await repository.ClaimNextPendingJobAsync(CancellationToken.None);
-            await repository.ClaimNextPendingJobAsync(CancellationToken.None);
+            var first = await repository.ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
 
-            await repository.MarkJobFailedAsync(finished.Id, "Reason", CancellationToken.None);
+            await repository.MarkJobFailedAsync(first!.Id, first.FencingToken, "Reason", CancellationToken.None);
+
+            var second = await repository.ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
+
+            Assert.Equal(active.Id, second!.Id);
+
+            // A stale call changes no job, but still runs the cleanup.
+            await repository.MarkJobFailedAsync(finished.Id, first.FencingToken, "Too late", CancellationToken.None);
         }
 
         var remaining = await QueryAsync(context => context.ImportJobInputs.SingleAsync());
 
-        Assert.Equal(interrupted.Id, remaining.ImportLogId);
+        Assert.Equal(active.Id, remaining.ImportLogId);
     }
 
     // Failing to record the failure must not lose the input a retry would need.
@@ -449,10 +457,10 @@ public sealed class ImportJobInputTests : SqlServerTestBase
         {
             var repository = new ImportRepository(dbContext);
 
-            var claimed = await repository.ClaimNextPendingJobAsync(CancellationToken.None);
+            var claimed = await repository.ClaimNextJobAsync("test-worker", TimeSpan.FromMinutes(5), CancellationToken.None);
 
             await Assert.ThrowsAsync<FailOnCommitInterceptor.CommitFailedException>(
-                () => repository.MarkJobFailedAsync(claimed!.Id, "Reason", CancellationToken.None));
+                () => repository.MarkJobFailedAsync(claimed!.Id, claimed.FencingToken, "Reason", CancellationToken.None));
         }
 
         Assert.Equal(ImportJobStatus.Processing, (await GetOnlyJobAsync()).Status);

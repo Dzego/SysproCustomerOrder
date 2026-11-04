@@ -23,53 +23,37 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
     private const string RetriesExhaustedReason =
         "The import kept failing on a temporary database problem and will not be retried.";
 
-    // Recovery updates jobs in bulk, so this cannot state each job's own progress.
     private const string AttemptsExhaustedReason =
-        "The import was interrupted too many times and will not be retried. " +
-        "Lines counted in this job's results were committed and remain applied.";
+        "The import was interrupted too many times and will not be retried.";
+
+    // For diagnosis only. Ownership is enforced by the fencing token, not by this name.
+    private static readonly string WorkerName = CreateWorkerName();
 
     private static readonly TimeSpan ReleaseTimeout = TimeSpan.FromSeconds(5);
 
     private readonly IImportRepository _importRepository;
     private readonly ICustomerImportService _importService;
     private readonly CustomerImportWorkerOptions _options;
+    private readonly TimeSpan _leaseDuration;
     private readonly ILogger<CustomerImportJobRunner> _logger;
 
     public CustomerImportJobRunner(
         IImportRepository importRepository,
         ICustomerImportService importService,
         IOptions<CustomerImportWorkerOptions> options,
+        IOptions<CustomerImportOptions> importOptions,
         ILogger<CustomerImportJobRunner> logger)
     {
         _importRepository = importRepository;
         _importService = importService;
         _options = options.Value;
+        _leaseDuration = importOptions.Value.LeaseDuration;
         _logger = logger;
-    }
-
-    // A Processing job that nothing is running can safely run again, because it resumes
-    // after its checkpoint. A batch that was cut short committed nothing. The failure limit
-    // stops a job that crashes the process from doing so forever.
-    public async Task RecoverInterruptedJobsAsync(CancellationToken stoppingToken)
-    {
-        var recovery = await _importRepository.RecoverInterruptedJobsAsync(
-            _options.MaxAttempts,
-            AttemptsExhaustedReason,
-            stoppingToken);
-
-        if (recovery.Requeued > 0 || recovery.Failed > 0)
-        {
-            _logger.LogWarning(
-                "Recovered interrupted import jobs: {RequeuedCount} requeued, {FailedCount} failed after {MaxAttempts} attempts",
-                recovery.Requeued,
-                recovery.Failed,
-                _options.MaxAttempts);
-        }
     }
 
     public async Task<bool> RunNextJobAsync(CancellationToken stoppingToken)
     {
-        var job = await _importRepository.ClaimNextPendingJobAsync(stoppingToken);
+        var job = await _importRepository.ClaimNextJobAsync(WorkerName, _leaseDuration, stoppingToken);
 
         if (job is null)
         {
@@ -77,12 +61,32 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
         }
 
         var jobId = job.Id;
+        var fencingToken = job.FencingToken;
 
         _logger.LogInformation(
-            "Started import job {JobId}, attempt {AttemptCount}, after {CommittedLines} committed lines",
+            "Started import job {JobId}, attempt {AttemptCount}, token {FencingToken}, after {CommittedLines} committed lines",
             jobId,
             job.AttemptCount,
+            fencingToken,
             job.ProcessedCount);
+
+        // The count includes this claim, so this job has already had MaxAttempts executions
+        // with no progress. It stops here a job that crashes the process from doing so forever.
+        if (job.ConsecutiveFailureCount > _options.MaxAttempts)
+        {
+            _logger.LogError(
+                "Import job {JobId} was interrupted {ConsecutiveFailureCount} times with no progress and was marked as failed",
+                jobId,
+                job.ConsecutiveFailureCount - 1);
+
+            await _importRepository.MarkJobFailedAsync(
+                jobId,
+                fencingToken,
+                AttemptsExhaustedReason + DescribeProgress(job.ProcessedCount),
+                stoppingToken);
+
+            return true;
+        }
 
         try
         {
@@ -98,6 +102,7 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
 
                 await _importRepository.MarkJobFailedAsync(
                     jobId,
+                    fencingToken,
                     InputMissingReason + DescribeProgress(job.ProcessedCount),
                     stoppingToken);
 
@@ -116,17 +121,17 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
         }
         catch (Exception exception) when (stoppingToken.IsCancellationRequested)
         {
-            await HandleShutdownAsync(jobId, exception);
+            await HandleShutdownAsync(jobId, fencingToken, exception);
         }
         catch (ImportJobStateChangedException exception)
         {
-            _logger.LogWarning(exception, "Import job {JobId} stopped because it changed elsewhere", jobId);
+            _logger.LogWarning(exception, "Import job {JobId} was reclaimed by another worker, so this one stopped", jobId);
         }
         catch (Exception exception)
         {
             _logger.LogError(exception, "Import job {JobId} failed", jobId);
 
-            await HandleFailureAsync(jobId, exception, stoppingToken);
+            await HandleFailureAsync(jobId, fencingToken, exception, stoppingToken);
         }
 
         return true;
@@ -134,7 +139,11 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
 
     // Reads the job back rather than trusting what this execution last saw. A lost
     // connection can hide a COMMIT that succeeded, so the database decides what happened.
-    private async Task HandleFailureAsync(int jobId, Exception exception, CancellationToken stoppingToken)
+    private async Task HandleFailureAsync(
+        int jobId,
+        long fencingToken,
+        Exception exception,
+        CancellationToken stoppingToken)
     {
         var job = await _importRepository.GetJobAsync(jobId, stoppingToken);
 
@@ -144,6 +153,13 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
                 "Import job {JobId} is already {Status}, so its last commit succeeded despite the error",
                 jobId,
                 job?.Status);
+
+            return;
+        }
+
+        if (job.FencingToken != fencingToken)
+        {
+            _logger.LogWarning("Import job {JobId} has been reclaimed by another worker, so this one will not change it", jobId);
 
             return;
         }
@@ -158,7 +174,7 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
                 job.ProcessedCount,
                 job.ConsecutiveFailureCount);
 
-            await _importRepository.RequeueJobAsync(jobId, stoppingToken);
+            await _importRepository.RequeueJobAsync(jobId, fencingToken, stoppingToken);
 
             return;
         }
@@ -167,8 +183,17 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
 
         await _importRepository.MarkJobFailedAsync(
             jobId,
+            fencingToken,
             reason + DescribeProgress(job.ProcessedCount),
             stoppingToken);
+    }
+
+    private static string CreateWorkerName()
+    {
+        // The unique part comes first, so that a long machine name cannot truncate it.
+        var name = $"{Guid.NewGuid():N}:{Environment.ProcessId}:{Environment.MachineName}";
+
+        return name[..Math.Min(name.Length, ImportLog.LeaseOwnerMaxLength)];
     }
 
     private static string DescribeProgress(int committedLines)
@@ -181,8 +206,8 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
 
     // Requeues whatever the exception was: the batch in progress was rolled back, and if
     // this is a genuine fault the next run will report it as a failure. Failing to requeue
-    // is also safe, because the job stays Processing and is recovered at next startup.
-    private async Task HandleShutdownAsync(int jobId, Exception exception)
+    // is also safe, because the job stays Processing until its lease expires.
+    private async Task HandleShutdownAsync(int jobId, long fencingToken, Exception exception)
     {
         if (CancellationExceptionClassifier.IsCancellation(exception))
         {
@@ -197,13 +222,13 @@ public sealed class CustomerImportJobRunner : ICustomerImportJobRunner
         {
             using var timeout = new CancellationTokenSource(ReleaseTimeout);
 
-            await _importRepository.ReleaseJobAsync(jobId, timeout.Token);
+            await _importRepository.ReleaseJobAsync(jobId, fencingToken, timeout.Token);
         }
         catch (Exception releaseException)
         {
             _logger.LogWarning(
                 releaseException,
-                "Could not requeue import job {JobId} during shutdown. It will be recovered at next startup",
+                "Could not requeue import job {JobId} during shutdown. Another worker can take it when its lease expires",
                 jobId);
         }
     }
