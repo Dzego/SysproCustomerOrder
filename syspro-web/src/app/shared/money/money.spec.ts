@@ -15,12 +15,18 @@ describe('money', () => {
       expect(toCents(input)).toBe(expected);
     });
 
-    it.each([[-1], [1.005], ['1.234'], ['abc'], [''], [Number.NaN], [Number.POSITIVE_INFINITY], [1e-7]])(
-      'rejects %p',
-      (input) => {
-        expect(toCents(input)).toBeNull();
-      },
-    );
+    it.each([
+      [-1],
+      [1.005],
+      ['1.234'],
+      ['abc'],
+      [''],
+      [Number.NaN],
+      [Number.POSITIVE_INFINITY],
+      [1e-7],
+    ])('rejects %p', (input) => {
+      expect(toCents(input)).toBeNull();
+    });
   });
 
   it('multiplies price and quantity exactly, where floating point would drift', () => {

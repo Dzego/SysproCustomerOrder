@@ -22,7 +22,9 @@ import { AppTitleStrategy } from './navigation/app-title-strategy';
   exports: [ShellComponent],
   providers: [
     // withInterceptorsFromDi() enables class-based interceptors registered with
-    // the HTTP_INTERCEPTORS token, the NgModule-style approach (added in Phase 4).
+    // the HTTP_INTERCEPTORS token, the NgModule-style approach. None is needed yet:
+    // the API has no authentication, and errors are mapped in each API service.
+    // An auth interceptor belongs here once the API requires a token.
     provideHttpClient(withInterceptorsFromDi()),
     { provide: APP_CONFIG, useValue: environment },
     { provide: TitleStrategy, useClass: AppTitleStrategy },

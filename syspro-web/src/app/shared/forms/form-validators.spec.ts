@@ -1,6 +1,12 @@
 import { FormControl } from '@angular/forms';
 
-import { MAX_INT, commonErrorMessage, requiredText, trimmedMaxLength, wholeNumber } from './form-validators';
+import {
+  MAX_INT,
+  commonErrorMessage,
+  requiredText,
+  trimmedMaxLength,
+  wholeNumber,
+} from './form-validators';
 
 describe('form validators', () => {
   it('requiredText rejects empty and whitespace-only text', () => {
@@ -32,9 +38,13 @@ describe('form validators', () => {
   it('gives the server message first, then the common messages', () => {
     expect(commonErrorMessage({ required: true, server: 'From the API.' })).toBe('From the API.');
     expect(commonErrorMessage({ required: true })).toBe('This field is required.');
-    expect(commonErrorMessage({ maxlength: { requiredLength: 10 } })).toBe('Use at most 10 characters.');
+    expect(commonErrorMessage({ maxlength: { requiredLength: 10 } })).toBe(
+      'Use at most 10 characters.',
+    );
     expect(commonErrorMessage({ wholeNumber: true })).toBe('Enter a whole number.');
-    expect(commonErrorMessage({ range: { min: 1, max: 2000 } })).toBe('Enter a number from 1 to 2,000.');
+    expect(commonErrorMessage({ range: { min: 1, max: 2000 } })).toBe(
+      'Enter a number from 1 to 2,000.',
+    );
     expect(commonErrorMessage({ other: true })).toBeNull();
     expect(commonErrorMessage(null)).toBeNull();
   });

@@ -1,0 +1,12 @@
+{
+  "id": 42,
+  "status": "Pending",
+  "createdAt": "2026-11-09T10:00:00Z",
+  "startedAt": null,
+  "completedAt": null,
+  "processed": 0,
+  "created": 0,
+  "updated": 0,
+  "failed": 0,
+  "failureReason": null
+}

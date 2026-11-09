@@ -1,7 +1,12 @@
 import { CustomerOrderTotal } from '../../core/api/models/customer-order-total';
 import { CustomerFilters, pageCustomers } from './customer-spending';
 
-const row = (customerId: number, name: string, total: number, legacy = `${customerId}`.padStart(10, '0')): CustomerOrderTotal => ({
+const row = (
+  customerId: number,
+  name: string,
+  total: number,
+  legacy = `${customerId}`.padStart(10, '0'),
+): CustomerOrderTotal => ({
   customerId,
   legacyCustomerId: legacy,
   name,
@@ -30,8 +35,21 @@ describe('pageCustomers', () => {
   it('includes customers with zero spending by default, highest first and ties by name', () => {
     const page = pageCustomers(rows, filters(), 0);
 
-    expect(names(page)).toEqual(['Acme Trading', 'Bluth Company', 'globex', 'Initech', 'Wayne Enterprises']);
-    expect(page).toMatchObject({ totalCount: 5, matchCount: 5, zeroCount: 2, firstRow: 1, lastRow: 5, pageCount: 1 });
+    expect(names(page)).toEqual([
+      'Acme Trading',
+      'Bluth Company',
+      'globex',
+      'Initech',
+      'Wayne Enterprises',
+    ]);
+    expect(page).toMatchObject({
+      totalCount: 5,
+      matchCount: 5,
+      zeroCount: 2,
+      firstRow: 1,
+      lastRow: 5,
+      pageCount: 1,
+    });
   });
 
   it('hides customers without orders when asked', () => {
@@ -44,7 +62,9 @@ describe('pageCustomers', () => {
 
   it('searches names and legacy ids without regard to case', () => {
     expect(names(pageCustomers(rows, filters({ search: 'GLOB' }), 0))).toEqual(['globex']);
-    expect(names(pageCustomers(rows, filters({ search: ' 0000000004 ' }), 0))).toEqual(['Bluth Company']);
+    expect(names(pageCustomers(rows, filters({ search: ' 0000000004 ' }), 0))).toEqual([
+      'Bluth Company',
+    ]);
   });
 
   it.each([
@@ -57,13 +77,19 @@ describe('pageCustomers', () => {
   });
 
   it('pages the matches and keeps the page within range', () => {
-    const many = Array.from({ length: 60 }, (_, i) => row(i + 1, `Customer ${String(i + 1).padStart(2, '0')}`, 0));
+    const many = Array.from({ length: 60 }, (_, i) =>
+      row(i + 1, `Customer ${String(i + 1).padStart(2, '0')}`, 0),
+    );
 
     const second = pageCustomers(many, filters({ sort: 'name-asc' }), 1);
     expect(second).toMatchObject({ pageIndex: 1, pageCount: 3, firstRow: 26, lastRow: 50 });
     expect(second.rows[0].name).toBe('Customer 26');
 
-    expect(pageCustomers(many, filters(), 99)).toMatchObject({ pageIndex: 2, firstRow: 51, lastRow: 60 });
+    expect(pageCustomers(many, filters(), 99)).toMatchObject({
+      pageIndex: 2,
+      firstRow: 51,
+      lastRow: 60,
+    });
     expect(pageCustomers(many, filters(), -3).pageIndex).toBe(0);
   });
 

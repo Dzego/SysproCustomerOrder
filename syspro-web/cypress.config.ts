@@ -20,6 +20,8 @@ export default defineConfig({
     viewportHeight: 800,
     video: false,
     screenshotOnRunFailure: true,
+    // The real API and database answer more slowly than fixtures.
+    defaultCommandTimeout: suite === 'fullstack' ? 10000 : 4000,
     expose: { suite },
   },
 });

@@ -1,13 +1,8 @@
-# Full-stack Cypress suite (opt-in)
+# Full-stack Cypress suite
 
-Specs in this folder call the real ASP.NET Core API. They never run with `npm run e2e`;
-use `npm run e2e:fullstack` instead.
+These specs call the real ASP.NET Core API through the dev-server proxy, backed by the
+isolated learning database. `cy.intercept` is disabled here.
 
-Rules:
-
-- Run them only against a **separate development database**, never the original
-  `syspro-sqlserver` container or its `sysprocustomerorder_syspro_sql_data` volume.
-- Do not use `cy.intercept` stubs here. These specs check the real contract.
-- Each spec creates the data it needs and must not depend on other specs or on existing rows.
-
-The specs and the disposable database setup are added in Phase 5.
+Run them with `scripts/learning-env/verify-fullstack.sh`. Setup and safety rules are in
+[docs/FULLSTACK_TESTING.md](../../../../docs/FULLSTACK_TESTING.md). Never point this suite
+at the original `syspro-sqlserver` container.

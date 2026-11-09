@@ -1,0 +1,12 @@
+{
+  "id": 501,
+  "customerId": 11,
+  "orderDate": "2026-11-09T10:15:00.1234567Z",
+  "currency": "USD",
+  "status": "Confirmed",
+  "total": 60.27,
+  "items": [
+    { "id": 9001, "sku": "SKU-1", "description": "Widget", "unitPrice": 19.99, "quantity": 3, "lineTotal": 59.97 },
+    { "id": 9002, "sku": "SKU-2", "description": "Washer", "unitPrice": 0.1, "quantity": 3, "lineTotal": 0.3 }
+  ]
+}

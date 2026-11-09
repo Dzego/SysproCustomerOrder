@@ -29,7 +29,21 @@ npm ci
 | `npm run format` / `format:check` | Prettier |
 | `npm run e2e` | Cypress **frontend** suite (needs `npm start` running; no backend) |
 | `npm run e2e:open` | Cypress interactive runner |
-| `npm run e2e:fullstack` | Opt-in Cypress **full-stack** suite against a real API and a separate database |
+| `npm run e2e:fullstack` | Cypress **full-stack** suite against the real API and the isolated learning database. See [docs/FULLSTACK_TESTING.md](../docs/FULLSTACK_TESTING.md) |
+
+## Pages
+
+| Page | What it does |
+|---|---|
+| Dashboard | Spending summary and top customers for a date range |
+| Customer spending | Every customer's total for a date range, including zero spenders; search, sort, paging; start an order for a customer |
+| Orders | Look up an order by number; create an order with several lines; view an order's details |
+| Customer imports | Start an import, follow its progress until it finishes, find a job by id |
+
+How it is built, why each RxJS operator was chosen and what the API does not support:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+To run every frontend check at once: `../scripts/learning-env/verify-frontend.sh`.
 
 ## Structure
 
@@ -41,7 +55,7 @@ src/app/
   features/  dashboard, customers, orders, imports, each a lazy module with its own routing module
 src/styles/  design tokens (CSS custom properties, light and dark), base styles, shared component classes
 cypress/e2e/frontend   deterministic tests; every /api call must be stubbed with cy.intercept
-cypress/e2e/fullstack  opt-in tests against the real backend
+cypress/e2e/fullstack  tests against the real backend and the learning database (cy.intercept disabled)
 ```
 
 ## Notes

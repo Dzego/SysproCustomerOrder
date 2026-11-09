@@ -9,6 +9,11 @@ const pages = [
 ] as const;
 
 describe('Application navigation', () => {
+  // Pages that load data on arrival get fixtures, so navigation is tested on its own.
+  beforeEach(() => {
+    cy.intercept('GET', '/api/customers/totals*', { fixture: 'customer-totals.json' });
+  });
+
   // The dashboard loads customer totals when it renders. An empty list is
   // enough here; dashboard.cy.ts covers the data itself.
   beforeEach(() => {

@@ -112,8 +112,8 @@
                     data-cy="customer-suggestion"
                     (click)="chooseSuggestion(customer)"
                   >
-                    <span class="suggestions__id">{{ customer.legacyCustomerId }}</span>
-                    <span>{{ customer.name }}</span>
+                    <span class="suggestions__id">{{ customer.legacyCustomerId }}</span
+                    ><span class="visually-hidden">, </span><span>{{ customer.name }}</span>
                   </button>
                 </li>
               }

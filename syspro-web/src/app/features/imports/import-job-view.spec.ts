@@ -22,9 +22,15 @@ describe('describeJob', () => {
   });
 
   it('describes running, finished and failed jobs', () => {
-    expect(describeJob(job({ status: 'Processing', processed: 1500 }))).toContain('1,500 lines committed');
-    expect(describeJob(job({ status: 'Completed', processed: 60000 }))).toContain('60,000 lines processed');
+    expect(describeJob(job({ status: 'Processing', processed: 1500 }))).toContain(
+      '1,500 lines committed',
+    );
+    expect(describeJob(job({ status: 'Completed', processed: 60000 }))).toContain(
+      '60,000 lines processed',
+    );
     expect(describeJob(job({ status: 'Failed' }))).toContain('No customers were changed');
-    expect(describeJob(job({ status: 'Failed', processed: 1000 }))).toContain('Those lines remain applied');
+    expect(describeJob(job({ status: 'Failed', processed: 1000 }))).toContain(
+      'Those lines remain applied',
+    );
   });
 });
