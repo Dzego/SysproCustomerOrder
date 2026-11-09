@@ -31,7 +31,10 @@ describe('Orders (real API and SQL Server)', () => {
       .eq(index)
       .within(() => {
         cy.getByCy('item-sku').type(sku);
-        cy.getByCy('item-description').type(description);
+        // The API allows an empty description; Cypress cannot type an empty string.
+        if (description) {
+          cy.getByCy('item-description').type(description);
+        }
         cy.getByCy('item-quantity').clear().type(quantity);
         cy.getByCy('item-unit-price').type(price);
       });

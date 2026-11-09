@@ -80,7 +80,12 @@ learning_connection_string() {
 }
 
 container_state() {
-  docker inspect --format '{{.State.Status}}' "$LEARNING_CONTAINER" 2>/dev/null || echo "missing"
+  # docker inspect prints an empty line as well as failing for a missing container.
+  if docker container inspect "$LEARNING_CONTAINER" >/dev/null 2>&1; then
+    docker container inspect --format '{{.State.Status}}' "$LEARNING_CONTAINER"
+  else
+    echo "missing"
+  fi
 }
 
 # Runs a query inside the learning container, using the password from the container's own
