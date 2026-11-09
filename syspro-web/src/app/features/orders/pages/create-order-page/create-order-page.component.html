@@ -32,13 +32,24 @@
         </div>
       } @else {
         <app-error-state
-          heading="The order was not saved"
+          heading="The order may not have been saved"
           [message]="error.message"
           [traceId]="error.traceId"
           [retryable]="isRetryable(error)"
-          retryLabel="Try saving again"
+          retryLabel="Send the order again"
           (retry)="onSubmit()"
         />
+        @if (isRetryable(error)) {
+          <div class="alert alert--warning" role="note" data-cy="create-order-maybe-saved">
+            <p class="alert__title">Check before sending again</p>
+            <p>
+              The connection failed or the server reported an error, so the order could have been
+              saved before the response was lost. The API cannot yet detect a repeated request, so
+              sending again may create a duplicate order. If you can, ask an administrator to check
+              for an order for this customer from the last few minutes first.
+            </p>
+          </div>
+        }
       }
     } @else if (submitAttempted && form.invalid) {
       <div class="alert alert--danger" role="alert" data-cy="create-order-invalid">

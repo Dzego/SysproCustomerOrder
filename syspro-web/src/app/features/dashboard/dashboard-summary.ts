@@ -7,25 +7,26 @@ export interface RankedCustomer {
   readonly customerId: number;
   readonly legacyCustomerId: string;
   readonly name: string;
+  /** The API's figure for this customer: order lines in every currency, unconverted. */
   readonly total: number;
-  /** Fraction (0–1) of the period's order value. */
-  readonly share: number;
 }
 
 /**
- * Everything the dashboard shows, derived only from GET /api/customers/totals.
- * The API offers no order counts, order lists or import history, so the
- * dashboard does not show them.
+ * What the dashboard shows, derived only from GET /api/customers/totals.
+ *
+ * The API returns one total per customer with no currency, adding order lines in
+ * every currency together. Any figure built by combining those totals (a sum
+ * across customers, an average, a percentage share) could mix rand, dollars and
+ * euros, so none is calculated. Only counts, which are currency-free, are
+ * summarised. A per-currency API contract is proposed in
+ * docs/BACKEND_CHANGE_PROPOSALS.md.
  */
 export interface DashboardSummary {
   /** Every customer the API knows, whether or not they ordered in the period. */
   readonly customerCount: number;
-  /** Customers whose order lines in the period add up to more than zero. */
+  /** Customers with at least one order line in the period. */
   readonly purchasingCustomerCount: number;
-  /** Sum of all order lines in the period, all currencies added as stored. */
-  readonly orderValue: number;
-  /** orderValue / purchasingCustomerCount, or null when nobody purchased. */
-  readonly averagePerPurchasingCustomer: number | null;
+  readonly customersWithoutOrders: number;
   readonly topCustomers: readonly RankedCustomer[];
 }
 
@@ -36,24 +37,16 @@ export interface DashboardSummary {
 export function summarizeCustomerTotals(rows: readonly CustomerOrderTotal[]): DashboardSummary {
   const purchasing = rows.filter((row) => row.total > 0);
 
-  // Totals are decimal(18,2) on the server. Adding whole cents avoids binary
-  // floating-point drift such as 0.1 + 0.2 = 0.30000000000000004.
-  const totalCents = purchasing.reduce((sum, row) => sum + Math.round(row.total * 100), 0);
-  const orderValue = totalCents / 100;
-
   return {
     customerCount: rows.length,
     purchasingCustomerCount: purchasing.length,
-    orderValue,
-    averagePerPurchasingCustomer:
-      purchasing.length > 0 ? Math.round(totalCents / purchasing.length) / 100 : null,
+    customersWithoutOrders: rows.length - purchasing.length,
     topCustomers: purchasing.slice(0, TOP_CUSTOMER_COUNT).map((row, index) => ({
       rank: index + 1,
       customerId: row.customerId,
       legacyCustomerId: row.legacyCustomerId,
       name: row.name,
       total: row.total,
-      share: row.total / orderValue,
     })),
   };
 }

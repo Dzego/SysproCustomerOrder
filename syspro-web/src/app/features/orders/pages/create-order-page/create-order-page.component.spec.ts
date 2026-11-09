@@ -223,6 +223,10 @@ describe('CreateOrderPageComponent', () => {
 
     expect(text('error-state-message')).toBe('The server could not complete the request.');
     expect(text('error-state-trace')).toContain('trace-1');
+    // The order may have been saved before the failure, so resending is not presented as safe.
+    expect(text('error-state-heading')).toBe('The order may not have been saved');
+    expect(text('create-order-maybe-saved')).toContain('may create a duplicate order');
+    expect(text('error-state-retry')).toBe('Send the order again');
 
     query('error-state-retry').click();
     fixture.detectChanges();
@@ -253,6 +257,18 @@ describe('CreateOrderPageComponent', () => {
       'Something else.',
     ]);
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('does not warn about duplicates for a rejected request, which cannot have been saved', () => {
+    setUp();
+    fillValidOrder();
+    submit();
+
+    createCalls[0].response.error(new ApiError('rejected', 'Payload too large.', 413));
+    fixture.detectChanges();
+
+    expect(query('create-order-maybe-saved')).toBeNull();
+    expect(query('error-state-retry')).toBeNull();
   });
 
   it('marks the customer field when the API cannot find the customer (404)', async () => {
@@ -309,11 +325,28 @@ describe('CreateOrderPageComponent', () => {
     expect(query('customer-unknown')).not.toBeNull();
   }));
 
+  it('does not download the customer list until an identifier is typed', fakeAsync(() => {
+    setUp();
+    tick(1000);
+    fixture.detectChanges();
+
+    expect(directoryRequests).toBe(0);
+
+    type(query('legacy-customer-id'), 'A');
+    tick(200);
+    type(query('legacy-customer-id'), 'AB');
+    tick(200);
+    fixture.detectChanges();
+
+    expect(directoryRequests).toBe(1);
+  }));
+
   it('still allows manual entry when the customer list cannot be loaded', fakeAsync(() => {
     const failing = new Observable<readonly CustomerOrderTotal[]>((subscriber) =>
       subscriber.error(new ApiError('server', 'down', 500)),
     );
     setUp({}, failing);
+    type(query('legacy-customer-id'), 'X1');
     tick(200);
     fixture.detectChanges();
 

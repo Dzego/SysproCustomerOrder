@@ -4,6 +4,8 @@ For the team deciding whether the SYSPRO Customer & Order system can go to produ
 It covers the Angular frontend, the ASP.NET Core API and the SQL Server database, as of
 this review.
 
+Proposed backend fixes are in [BACKEND_CHANGE_PROPOSALS.md](BACKEND_CHANGE_PROPOSALS.md).
+
 **Verdict:** not ready for production. The functionality is complete and well tested,
 but the API has **no authentication or authorization**, which blocks any deployment
 outside a trusted network. The other gaps below are smaller.
@@ -35,8 +37,11 @@ Status: ✅ in place · ⚠️ partly in place or a known limitation · ❌ miss
 
 ### Authentication and authorization ❌ (blocker)
 
-- No authentication middleware, no `[Authorize]`, no roles. Anyone who can reach the
-  API can create orders and start imports.
+- Verified in the code: no `AddAuthentication`, `AddAuthorization`, `[Authorize]`,
+  rate limiting or authentication package. Anyone who can reach the API can read all
+  customers' spending, create orders and start imports.
+- In Development, 500 responses include the stack trace. Production must never run
+  as Development.
 - **Backend change needed:** add OpenID Connect or JWT bearer authentication, and
   policies (for example, import requires an administrator role).
 - **Frontend change then needed:** sign-in flow, an HTTP interceptor that adds the
@@ -44,12 +49,14 @@ Status: ✅ in place · ⚠️ partly in place or a known limitation · ❌ miss
 
 ### Data correctness ⚠️
 
-- `GET /api/customers/totals` sums order lines in every currency into one number. The
-  UI labels this ("added without conversion"), but the figures are misleading as soon
-  as more than one currency is used. **Backend change:** return totals per currency.
-- `POST /api/orders` is not idempotent. The UI prevents double clicks, but a retry
-  after a lost response creates a second order. **Backend change:** an
-  `Idempotency-Key` header.
+- `GET /api/customers/totals` sums order lines in every currency into one number per
+  customer. The dashboard therefore shows only currency-free counts and a notice; it
+  calculates no sums, averages or shares across customers. Per-customer figures are
+  labelled "unconverted". **Backend change:** per-currency totals (proposal 2).
+- `POST /api/orders` is not idempotent. The UI prevents double clicks, and after a
+  network error or 5xx it warns that the order may already be saved instead of
+  presenting a retry as safe. A retry can still create a duplicate. **Backend
+  change:** an `Idempotency-Key` header (proposal 3).
 - Order dates are always the server's current UTC time. This is safe, but orders
   cannot be back-dated.
 - The frontend never adds money as floating point (it uses `BigInt` cents).
@@ -85,12 +92,15 @@ fencing tokens for imports. See [DEPLOYMENT_RUNBOOK.md](DEPLOYMENT_RUNBOOK.md).
 
 ### Performance ⚠️
 
-- The customer totals endpoint returns every customer in one response. The frontend
-  pages, sorts and filters in the browser, which is fine for thousands of rows but
-  not for hundreds of thousands. **Backend change:** server-side paging and search.
+- The customer totals endpoint returns every customer in one response, with a sum
+  over all their orders. The customer page renders one page of rows at a time, and
+  the new-order page only loads the list once an identifier is typed. That is
+  acceptable for thousands of customers, not hundreds of thousands. **Backend
+  change:** customer search and paged totals (proposal 4).
 - The initial frontend bundle is 414 kB raw, 110 kB compressed, within the 500 kB
   budget. Features are lazy-loaded.
-- Import polling stops when a job finishes and never overlaps requests.
+- Import polling stops when a job finishes, never overlaps requests, and stops at
+  once (including an in-flight request) when the user removes the job.
 
 ### Accessibility ⚠️
 

@@ -22,10 +22,10 @@ typed against the C# DTOs. Every HTTP failure becomes an `ApiError`
 
 | Route | Page | API |
 |---|---|---|
-| `/dashboard` | Summary, top customers, date range | `GET /api/customers/totals` |
+| `/dashboard` | Currency-free counts, highest recorded values (unconverted), date range | `GET /api/customers/totals` |
 | `/customers` | All customers with spending, search, sort, paging, zero-spend filter | `GET /api/customers/totals` |
 | `/orders` | Look up an order by number | – |
-| `/orders/new` | Create an order (Reactive Forms, `FormArray` lines) | `POST /api/orders`, `GET /api/customers/totals` for names |
+| `/orders/new` | Create an order (Reactive Forms, `FormArray` lines) | `POST /api/orders`; `GET /api/customers/totals` for names, loaded on the first keystroke |
 | `/orders/:id` | Order details and lines | `GET /api/orders/{id}` |
 | `/imports` | Start imports, follow progress, find a job by id | `POST /api/import/customers`, `GET /api/import/jobs/{id}` |
 
@@ -63,8 +63,9 @@ navigate, resetting the page index) use `takeUntilDestroyed`.
 | `distinctUntilChanged` | Same two places | Skips work when the value did not actually change (for example a trailing space added and removed) |
 | `catchError` | `mapApiError()`, `toLoadState()`, the poll request | Turns failures into `ApiError` values, keeping the outer stream alive |
 | `finalize` | `ImportJobsStore.poll` | Clears the job's "polling" flag however polling ends: finished, gave up, or forgotten |
+| `takeUntil` | `ImportJobsStore.poll` | Ends a job's polling the moment it is forgotten, aborting a request still in flight rather than waiting for its response |
 | `takeUntilDestroyed` | Shell router events, form side effects, submit and lookup pipelines | Ends subscriptions that drive side effects when the component is destroyed |
-| `shareReplay({ bufferSize: 1, refCount: true })` | Customer directory on the new-order page | Three template bindings use it; it is fetched once. `refCount` drops the cache when the page closes, so a later visit sees newly imported customers |
+| `shareReplay({ bufferSize: 1, refCount: true })` | Customer directory on the new-order page | Three template bindings use it; it is fetched once, after the first identifier is typed (`filter` + `take(1)` + `switchMap`). `refCount` drops the cache when the page closes, so a later visit sees newly imported customers |
 | `async` pipe | Every page | Subscribes and unsubscribes with the view; no manual subscriptions for rendered data |
 | `takeWhile(…, true)`, `scan`, `timer` | Import polling | Poll until terminal (inclusive, so the final state is shown); count failed requests in a row; poll immediately then on an interval |
 
@@ -78,14 +79,24 @@ navigate, resetting the page index) use `takeUntilDestroyed`.
   was rejected for that reason.
 - Polling stops on `Completed` or `Failed`, on a 404, on a non-retryable error,
   or after 5 failed requests in a row. The user can resume it.
+- Removing a job (`forget`) ends its polling immediately through `takeUntil`,
+  which unsubscribes from a request still waiting for a response.
 
 ### Duplicate submissions
 
 `exhaustMap` and the disabled fieldset stop one browser tab from sending the same
 order or import twice. **They do not make the API idempotent.** A retry after a
 lost response, a second tab, or another client can still create a second order
-or import. Real protection needs a backend change (see the production readiness
-review).
+or import. After a network error, timeout or 5xx, the order page says the order
+may already be saved instead of offering a "safe" retry. Real protection needs an
+idempotency key on the API (proposal 3 in `docs/BACKEND_CHANGE_PROPOSALS.md`).
+
+## Money and currencies
+
+`GET /api/customers/totals` returns one total per customer with no currency, adding
+every currency together. So the dashboard summarises only counts. It calculates no
+sums, averages or shares across customers, and each customer's figure is labelled
+"unconverted". Order pages show the order's own currency, which is always correct.
 
 ## Forms
 
@@ -140,8 +151,8 @@ These are backend limitations. The frontend does not invent endpoints for them.
 
 | Need | Current API | Backend change required |
 |---|---|---|
-| Correct totals across currencies | `GET /api/customers/totals` adds every currency together and returns no currency | Group totals by currency (`{ customerId, currency, total }[]`), or convert to a reporting currency |
-| Scale to many customers | Totals return every customer, unpaged | Add paging, sorting and search parameters |
+| Correct totals across currencies | `GET /api/customers/totals` adds every currency together and returns no currency | Per-currency totals (proposal 2 in `docs/BACKEND_CHANGE_PROPOSALS.md`) |
+| Scale to many customers | Totals return every customer, unpaged | Customer search and paged totals (proposal 4) |
 | Order date | Not accepted; the server stores `DateTime.UtcNow` | Add an optional `OrderDate` with validation, if back-dating is a business need |
 | List or search orders | Only `GET /api/orders/{id}` | Add `GET /api/orders?customerId=&from=&to=&page=` |
 | List import jobs | Only `GET /api/import/jobs/{id}`; this tab remembers ids in `sessionStorage` | Add `GET /api/import/jobs?page=` |
@@ -150,4 +161,5 @@ These are backend limitations. The frontend does not invent endpoints for them.
 | Retry a failed job | Not supported; a new import starts from the beginning (customers are upserted by legacy id) | A retry endpoint that resumes from the checkpoint |
 | Upload a file | The import reads a fixed file on the server | A multipart upload endpoint with size limits and malware scanning |
 | Customer details or creation | Customers only come from imports | `GET /api/customers/{id}` and, if needed, create and update endpoints |
-| Safe retries of `POST` | Not idempotent | An `Idempotency-Key` header stored with the order or job |
+| Safe retries of `POST` | Not idempotent | An `Idempotency-Key` header (proposal 3) |
+| Access control | No authentication or authorization | OIDC and JWT bearer with role policies (proposal 1) |

@@ -10,7 +10,6 @@ const customers: RankedCustomer[] = [
     legacyCustomerId: '0000012346',
     name: 'Acme',
     total: 1234.5,
-    share: 0.6,
   },
   {
     rank: 2,
@@ -18,7 +17,6 @@ const customers: RankedCustomer[] = [
     legacyCustomerId: '0000012399',
     name: 'Globex',
     total: 823,
-    share: 0.4,
   },
 ];
 
@@ -36,7 +34,7 @@ describe('TopCustomersTableComponent', () => {
     fixture.detectChanges();
   });
 
-  it('renders one row per customer with formatted totals and shares', () => {
+  it('renders one row per customer with its unconverted total and no share', () => {
     // Arrange
     const rows: HTMLElement[] = Array.from(
       fixture.nativeElement.querySelectorAll('[data-cy="top-customer-row"]'),
@@ -47,7 +45,8 @@ describe('TopCustomersTableComponent', () => {
     expect(rows[0].querySelector('[data-cy="top-customer-name"]')?.textContent).toBe('Acme');
     expect(rows[0].textContent).toContain('0000012346');
     expect(rows[0].querySelector('[data-cy="top-customer-total"]')?.textContent).toBe('1,234.50');
-    expect(rows[0].querySelector('[data-cy="top-customer-share"]')?.textContent).toBe('60%');
+    expect(rows[0].querySelector('[data-cy="top-customer-share"]')).toBeNull();
+    expect(fixture.nativeElement.querySelector('thead').textContent).toContain('unconverted');
   });
 
   it('names the table and its scrollable region for assistive technology', () => {

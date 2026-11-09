@@ -9,8 +9,7 @@
       <tr>
         <th scope="col" class="num">Rank</th>
         <th scope="col">Customer</th>
-        <th scope="col" class="num">Order value</th>
-        <th scope="col" class="num">Share</th>
+        <th scope="col" class="num">Recorded value (unconverted)</th>
       </tr>
     </thead>
     <tbody>
@@ -22,7 +21,6 @@
             <span class="table__sub">{{ customer.legacyCustomerId }}</span>
           </th>
           <td class="num" data-cy="top-customer-total">{{ customer.total | number: '1.2-2' }}</td>
-          <td class="num" data-cy="top-customer-share">{{ customer.share | percent: '1.0-1' }}</td>
         </tr>
       }
     </tbody>

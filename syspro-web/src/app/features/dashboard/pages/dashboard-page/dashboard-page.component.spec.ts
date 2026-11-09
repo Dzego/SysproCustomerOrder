@@ -86,10 +86,14 @@ describe('DashboardPageComponent', () => {
     // Assert
     expect(query('loading-state')).toBeNull();
     expect(query('dashboard-content')?.getAttribute('aria-busy')).toBe('false');
-    expect(text('stat-order-value')).toContain('310.22');
+    expect(text('stat-customers')).toContain('3');
     expect(text('stat-purchasing-customers')).toContain('2');
-    expect(text('stat-purchasing-customers')).toContain('of 3 customers on file');
-    expect(text('stat-average')).toContain('155.11');
+    expect(text('stat-without-orders')).toContain('1');
+    expect(text('currency-notice')).toContain('not converted between currencies');
+    // Totals may mix currencies, so nothing adds them up across customers.
+    expect(fixture.nativeElement.textContent).not.toContain('310.22');
+    expect(query('stat-order-value')).toBeNull();
+    expect(query('stat-average')).toBeNull();
 
     const names = Array.from(
       fixture.nativeElement.querySelectorAll(
@@ -111,14 +115,13 @@ describe('DashboardPageComponent', () => {
     expect(query('dashboard-stats')).toBeNull();
   });
 
-  it('shows zero metrics and a no-orders message when nobody ordered in the period', () => {
+  it('shows the counts and a no-orders message when nobody ordered in the period', () => {
     // Act
     respond([{ ...totals[2] }]);
 
     // Assert
-    expect(text('stat-order-value')).toContain('0.00');
-    expect(text('stat-purchasing-customers')).toContain('of 1 customer on file');
-    expect(text('stat-average')).toContain('Not available');
+    expect(text('stat-purchasing-customers')).toContain('0');
+    expect(text('stat-without-orders')).toContain('1');
     expect(text('empty-state-heading')).toBe('No orders in this period');
     expect(query('top-customers-table')).toBeNull();
   });

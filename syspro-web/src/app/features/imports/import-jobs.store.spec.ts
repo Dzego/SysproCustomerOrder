@@ -206,17 +206,71 @@ describe('ImportJobsStore', () => {
     expect(tracked(1)).toMatchObject({ polling: false, error: { kind: 'not-found' } });
   }));
 
-  it('stops polling a job that is forgotten', fakeAsync(() => {
+  it("cancels a forgotten job's request in flight at once, without waiting for its response", fakeAsync(() => {
+    // Arrange: a request is waiting for a response that never comes.
     create();
     store.track(job(1));
     tick(0);
+    expect(requests[0].response.observed).toBe(true);
 
+    // Act
     store.forget(1);
-    answer(job(1, { status: 'Processing' }));
-    tick(INTERVAL * 3);
 
+    // Assert: the HTTP subscription is gone and no new request is ever made.
+    expect(requests[0].response.observed).toBe(false);
+    tick(INTERVAL * 10);
     expect(requests).toHaveLength(1);
     expect(latest).toEqual([]);
+  }));
+
+  it("stops a forgotten job's timer between requests", fakeAsync(() => {
+    create();
+    store.track(job(1));
+    tick(0);
+    answer(job(1, { status: 'Processing' }));
+
+    store.forget(1);
+    tick(INTERVAL * 10);
+
+    expect(requests).toHaveLength(1);
+  }));
+
+  it('keeps polling the other jobs when one is forgotten', fakeAsync(() => {
+    create();
+    store.track(job(1));
+    store.track(job(2));
+    tick(0);
+    const request2 = requests.find((r) => r.id === 2)!;
+
+    store.forget(1);
+
+    expect(request2.response.observed).toBe(true);
+    request2.response.next(job(2, { status: 'Processing' }));
+    request2.response.complete();
+    tick(INTERVAL);
+    expect(requests.filter((r) => r.id === 2)).toHaveLength(2);
+    expect(requests.filter((r) => r.id === 1)).toHaveLength(1);
+
+    store.forget(2);
+    discardPeriodicTasks();
+  }));
+
+  it('polls afresh when a forgotten job is followed again', fakeAsync(() => {
+    create();
+    store.track(job(1));
+    tick(0);
+    store.forget(1);
+
+    store.track(job(1));
+    tick(0);
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0].response.observed).toBe(false);
+    expect(requests[1].response.observed).toBe(true);
+    expect(tracked(1)?.polling).toBe(true);
+
+    store.forget(1);
+    expect(tracked(1)).toBeUndefined();
   }));
 
   it('lists the newest job first and remembers ids for this tab', fakeAsync(() => {

@@ -136,6 +136,7 @@ describe('Orders (stubbed API)', () => {
       'The server could not complete the request.',
     );
     cy.contains('stack trace').should('not.exist');
+    cy.getByCy('create-order-maybe-saved').should('contain.text', 'may create a duplicate order');
     cy.getByCy('legacy-customer-id').should('have.value', 'T000000011');
   });
 

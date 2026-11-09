@@ -10,9 +10,12 @@ import {
   debounceTime,
   distinctUntilChanged,
   exhaustMap,
+  filter,
   map,
   shareReplay,
   startWith,
+  switchMap,
+  take,
 } from 'rxjs';
 
 import { ApiError, isRetryable } from '../../../../core/api/api-error';
@@ -116,14 +119,6 @@ export class CreateOrderPageComponent {
       );
     }
 
-    this.directory$ = customersApi
-      .getCustomerTotals({ from: '1900-01-01', to: toIsoDate(clock()) })
-      .pipe(
-        map((rows) => new Map(rows.flatMap((row) => directoryEntries(row)))),
-        toLoadState(),
-        shareReplay({ bufferSize: 1, refCount: true }),
-      );
-
     // The identifier the user is typing, in the active mode. debounceTime waits
     // for a pause in typing, and distinctUntilChanged skips values that did not
     // change (for example switching mode back and forth with the same text).
@@ -132,6 +127,24 @@ export class CreateOrderPageComponent {
       map(() => this.typedIdentifier()),
       debounceTime(200),
       distinctUntilChanged((a, b) => a.mode === b.mode && a.text === b.text),
+    );
+
+    // The customer list is only requested once the user starts typing an
+    // identifier, not when the page opens. The API has no customer search, so
+    // the only source is the spending report for all dates, which returns every
+    // customer and sums all their orders: acceptable for thousands of customers,
+    // not for hundreds of thousands. docs/BACKEND_CHANGE_PROPOSALS.md describes
+    // the search endpoint that should replace it.
+    this.directory$ = identifier$.pipe(
+      filter(({ text }) => text !== ''),
+      take(1),
+      switchMap(() =>
+        customersApi.getCustomerTotals({ from: '1900-01-01', to: toIsoDate(clock()) }).pipe(
+          map((rows) => new Map(rows.flatMap((row) => directoryEntries(row)))),
+          toLoadState(),
+        ),
+      ),
+      shareReplay({ bufferSize: 1, refCount: true }),
     );
 
     this.customerMatch$ = combineLatest([this.directory$, identifier$]).pipe(

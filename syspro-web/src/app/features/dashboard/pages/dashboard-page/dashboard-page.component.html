@@ -68,41 +68,36 @@
           </div>
         } @else {
           <dl class="stats grid grid--3" data-cy="dashboard-stats">
-            <div class="card stat" data-cy="stat-order-value">
-              <dt class="stat__label">Order value</dt>
-              <dd class="stat__value">{{ summary.orderValue | number: '1.2-2' }}</dd>
-              <dd class="stat__hint">
-                Sum of order lines. Amounts in different currencies are added without conversion.
-              </dd>
+            <div class="card stat" data-cy="stat-customers">
+              <dt class="stat__label">Customers on file</dt>
+              <dd class="stat__value">{{ summary.customerCount | number }}</dd>
+              <dd class="stat__hint">Every imported customer.</dd>
             </div>
             <div class="card stat" data-cy="stat-purchasing-customers">
               <dt class="stat__label">Customers with orders</dt>
               <dd class="stat__value">{{ summary.purchasingCustomerCount | number }}</dd>
-              <dd class="stat__hint">
-                of {{ summary.customerCount | number }}
-                {{ summary.customerCount === 1 ? 'customer' : 'customers' }} on file
-              </dd>
+              <dd class="stat__hint">At least one order line in the selected dates.</dd>
             </div>
-            <div class="card stat" data-cy="stat-average">
-              <dt class="stat__label">Average per customer with orders</dt>
-              <dd class="stat__value">
-                @if (summary.averagePerPurchasingCustomer === null) {
-                  <span aria-hidden="true">–</span>
-                  <span class="visually-hidden">Not available</span>
-                } @else {
-                  {{ summary.averagePerPurchasingCustomer | number: '1.2-2' }}
-                }
-              </dd>
-              <dd class="stat__hint">Order value divided by customers with orders.</dd>
+            <div class="card stat" data-cy="stat-without-orders">
+              <dt class="stat__label">Customers without orders</dt>
+              <dd class="stat__value">{{ summary.customersWithoutOrders | number }}</dd>
+              <dd class="stat__hint">No order lines in the selected dates.</dd>
             </div>
           </dl>
 
+          <div class="alert alert--info" data-cy="currency-notice">
+            <p class="alert__title">Amounts are not converted between currencies</p>
+            <p>
+              The API reports one figure per customer that adds order lines in every currency
+              together. A customer's figure can therefore mix currencies, so the dashboard shows no
+              totals, averages or shares across customers. Open an order to see its currency.
+            </p>
+          </div>
+
           <section class="card" aria-labelledby="top-customers-heading">
             <div class="dashboard__section-header">
-              <h2 id="top-customers-heading" class="card__title">Top customers</h2>
-              <a routerLink="/customers" data-cy="dashboard-view-all">
-                View all customer spending
-              </a>
+              <h2 id="top-customers-heading" class="card__title">Highest recorded order values</h2>
+              <a routerLink="/customers" data-cy="dashboard-view-all"> View all customers </a>
             </div>
 
             @if (summary.topCustomers.length === 0) {
@@ -114,7 +109,7 @@
             } @else {
               <app-top-customers-table
                 [customers]="summary.topCustomers"
-                caption="Top customers by order value in the selected period"
+                caption="Customers with the highest recorded order values in the selected period, unconverted"
               />
             }
           </section>

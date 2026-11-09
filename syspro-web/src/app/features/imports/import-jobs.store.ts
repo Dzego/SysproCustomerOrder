@@ -5,11 +5,13 @@ import {
   Subject,
   catchError,
   exhaustMap,
+  filter,
   finalize,
   map,
   mergeMap,
   of,
   scan,
+  takeUntil,
   takeWhile,
   timer,
 } from 'rxjs';
@@ -68,6 +70,9 @@ export class ImportJobsStore {
   /** Ids to start polling. */
   private readonly watchRequests = new Subject<number>();
 
+  /** Ids that are no longer followed. Their polling ends at once. */
+  private readonly forgotten = new Subject<number>();
+
   private readonly pollIntervalMs: number;
 
   constructor(
@@ -103,8 +108,12 @@ export class ImportJobsStore {
     }
   }
 
-  /** Stops following a job. A request in flight for it is ignored when it returns. */
+  /** Stops following a job and cancels its polling, including a request in flight. */
   forget(id: number): void {
+    // Stop polling first. takeUntil unsubscribes straight away, which also aborts a
+    // request that is still waiting for a response.
+    this.forgotten.next(id);
+
     const next = new Map(this.state.value);
     next.delete(id);
     this.setState(next);
@@ -158,6 +167,9 @@ export class ImportJobsStore {
         ({ result, failures }) => result === null || this.onPollResult(id, result, failures),
         true,
       ),
+      // Ends polling as soon as the job is forgotten, without waiting for the next
+      // response, which could take a long time or never come.
+      takeUntil(this.forgotten.pipe(filter((forgottenId) => forgottenId === id))),
       // Runs however polling ends: finished job, give-up, or forget().
       finalize(() => this.update(id, { polling: false })),
     );

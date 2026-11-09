@@ -68,7 +68,7 @@ describe('Customer spending and dashboard (real API and SQL Server)', () => {
     cy.getByCy('empty-state-heading').should('contain.text', 'No matching customers');
   });
 
-  it('shows dashboard figures that match the API for the same period', () => {
+  it('shows dashboard counts that match the API for the same period', () => {
     const today = todayUtc();
     cy.request('POST', '/api/orders', {
       legacyCustomerId: 'E2E0000005',
@@ -79,14 +79,18 @@ describe('Customer spending and dashboard (real API and SQL Server)', () => {
 
     getTotals(daysAgoUtc(29), today).then((rows) => {
       const purchasing = rows.filter((row) => row.total > 0);
-      const sum = purchasing.reduce((total, row) => total + cents(row.total), 0) / 100;
 
       cy.visit('/dashboard');
-      cy.getByCy('stat-order-value').should(
+      cy.getByCy('stat-customers').should('contain.text', rows.length.toLocaleString('en-US'));
+      cy.getByCy('stat-purchasing-customers').should(
         'contain.text',
-        sum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        purchasing.length.toLocaleString('en-US'),
       );
-      cy.getByCy('stat-purchasing-customers').should('contain.text', String(purchasing.length));
+      cy.getByCy('stat-without-orders').should(
+        'contain.text',
+        (rows.length - purchasing.length).toLocaleString('en-US'),
+      );
+      cy.getByCy('currency-notice').should('be.visible');
       cy.getByCy('top-customer-name').first().should('have.text', purchasing[0].name);
     });
   });

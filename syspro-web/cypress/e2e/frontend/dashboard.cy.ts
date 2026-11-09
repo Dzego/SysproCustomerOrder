@@ -1,19 +1,20 @@
 import { problem } from '../../support/problem';
 
 describe('Dashboard (stubbed API)', () => {
-  it('summarises customer spending and lists the top customers', () => {
+  it('shows currency-free counts and the highest recorded values, with no cross-customer sums', () => {
     cy.intercept('GET', '/api/customers/totals*', { fixture: 'customer-totals.json' }).as('totals');
 
     cy.visit('/dashboard');
 
     cy.wait('@totals').its('request.query').should('include.keys', 'fromDate', 'toDate');
-    cy.getByCy('stat-order-value').should('contain.text', '3,105.72');
-    cy.getByCy('stat-purchasing-customers')
-      .should('contain.text', '6')
-      .and('contain.text', 'of 8 customers');
+    cy.getByCy('stat-customers').should('contain.text', '8');
+    cy.getByCy('stat-purchasing-customers').should('contain.text', '6');
+    cy.getByCy('stat-without-orders').should('contain.text', '2');
+    cy.getByCy('currency-notice').should('contain.text', 'not converted between currencies');
+    // No figure that adds possibly different currencies across customers.
+    cy.contains('3,105.72').should('not.exist');
     cy.getByCy('top-customer-row').should('have.length', 5);
     cy.getByCy('top-customer-name').first().should('have.text', 'Test Customer Alpha');
-    cy.getByCy('stat-order-value').should('contain.text', 'without conversion');
   });
 
   it('sends the chosen period as whole UTC days', () => {
