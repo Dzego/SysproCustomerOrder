@@ -1,0 +1,13 @@
+/* Separate from the app tsconfig so Cypress and Jest globals (both define `expect`) never clash. */
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "preserve",
+    "strict": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "types": ["cypress", "node"]
+  },
+  "include": ["**/*.ts", "../cypress.config.ts"]
+}
