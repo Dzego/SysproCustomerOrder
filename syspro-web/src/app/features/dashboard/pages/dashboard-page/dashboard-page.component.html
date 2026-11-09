@@ -1,9 +1,125 @@
-<section class="page" data-cy="dashboard-page">
-  <app-page-header
-    heading="Dashboard"
-    description="Overview of customer spending, orders and customer import jobs."
-  />
-  <div class="card">
-    <p class="card__text">This page is implemented in Phase 3.</p>
-  </div>
-</section>
+@if (vm$ | async; as vm) {
+  <section class="page" data-cy="dashboard-page">
+    <app-page-header
+      heading="Dashboard"
+      description="Customer spending for a period, calculated from the orders recorded in the system."
+    >
+      <button
+        type="button"
+        class="btn btn--secondary"
+        data-cy="dashboard-refresh"
+        (click)="reload()"
+      >
+        Refresh
+      </button>
+    </app-page-header>
+
+    <div class="card">
+      <app-date-range-filter
+        idPrefix="dashboard-range"
+        [range]="vm.range"
+        [today]="today"
+        (rangeChange)="onRangeChange($event)"
+      />
+      <p class="dashboard__period" data-cy="dashboard-period">
+        Showing {{ vm.range.from | date: 'd MMM y' }} to {{ vm.range.to | date: 'd MMM y' }}
+        (UTC dates, both days included).
+      </p>
+    </div>
+
+    <!-- Persistent live region: announces new results, which replace the loading
+         message without moving focus. -->
+    <p class="visually-hidden" role="status" data-cy="dashboard-announcement">
+      @if (vm.state.status === 'success') {
+        Dashboard updated for {{ vm.range.from | date: 'd MMM y' }} to
+        {{ vm.range.to | date: 'd MMM y' }}.
+      }
+    </p>
+
+    <div
+      class="dashboard__content"
+      [attr.aria-busy]="vm.state.status === 'loading'"
+      data-cy="dashboard-content"
+    >
+      <!-- An @if chain rather than @switch: each branch narrows vm.state, so the
+           template can only read error or data where they exist. -->
+      @if (vm.state.status === 'loading') {
+        <app-loading-state label="Loading customer spending…" />
+      } @else if (vm.state.status === 'error') {
+        <app-error-state
+          heading="The dashboard could not be loaded"
+          [message]="vm.state.error.message"
+          [traceId]="vm.state.error.traceId"
+          [retryable]="isRetryable(vm.state.error)"
+          (retry)="reload()"
+        />
+      } @else {
+        @let summary = vm.state.data;
+        @if (summary.customerCount === 0) {
+          <div class="card">
+            <app-empty-state
+              heading="No customers yet"
+              message="Customer spending appears here once customers have been imported and have placed orders."
+            >
+              <a class="btn btn--primary" routerLink="/imports" data-cy="dashboard-go-imports">
+                Go to customer imports
+              </a>
+            </app-empty-state>
+          </div>
+        } @else {
+          <dl class="stats grid grid--3" data-cy="dashboard-stats">
+            <div class="card stat" data-cy="stat-order-value">
+              <dt class="stat__label">Order value</dt>
+              <dd class="stat__value">{{ summary.orderValue | number: '1.2-2' }}</dd>
+              <dd class="stat__hint">
+                Sum of order lines. Amounts in different currencies are added without conversion.
+              </dd>
+            </div>
+            <div class="card stat" data-cy="stat-purchasing-customers">
+              <dt class="stat__label">Customers with orders</dt>
+              <dd class="stat__value">{{ summary.purchasingCustomerCount | number }}</dd>
+              <dd class="stat__hint">
+                of {{ summary.customerCount | number }}
+                {{ summary.customerCount === 1 ? 'customer' : 'customers' }} on file
+              </dd>
+            </div>
+            <div class="card stat" data-cy="stat-average">
+              <dt class="stat__label">Average per customer with orders</dt>
+              <dd class="stat__value">
+                @if (summary.averagePerPurchasingCustomer === null) {
+                  <span aria-hidden="true">–</span>
+                  <span class="visually-hidden">Not available</span>
+                } @else {
+                  {{ summary.averagePerPurchasingCustomer | number: '1.2-2' }}
+                }
+              </dd>
+              <dd class="stat__hint">Order value divided by customers with orders.</dd>
+            </div>
+          </dl>
+
+          <section class="card" aria-labelledby="top-customers-heading">
+            <div class="dashboard__section-header">
+              <h2 id="top-customers-heading" class="card__title">Top customers</h2>
+              <a routerLink="/customers" data-cy="dashboard-view-all">
+                View all customer spending
+              </a>
+            </div>
+
+            @if (summary.topCustomers.length === 0) {
+              <app-empty-state
+                heading="No orders in this period"
+                [headingLevel]="3"
+                message="None of the customers on file has orders in the selected dates. Try a longer period."
+              />
+            } @else {
+              <app-top-customers-table
+                [customers]="summary.topCustomers"
+                caption="Top customers by order value in the selected period"
+              />
+            }
+          </section>
+        }
+      }
+    </div>
+  </section>
+}

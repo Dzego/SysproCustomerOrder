@@ -1,0 +1,30 @@
+<div class="table-wrap" role="region" [attr.aria-label]="caption" tabindex="0">
+  <table class="table" data-cy="top-customers-table">
+    <caption class="visually-hidden">
+      {{
+        caption
+      }}
+    </caption>
+    <thead>
+      <tr>
+        <th scope="col" class="num">Rank</th>
+        <th scope="col">Customer</th>
+        <th scope="col" class="num">Order value</th>
+        <th scope="col" class="num">Share</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (customer of customers; track customer.customerId) {
+        <tr data-cy="top-customer-row">
+          <td class="num">{{ customer.rank }}</td>
+          <th scope="row">
+            <span data-cy="top-customer-name">{{ customer.name }}</span>
+            <span class="table__sub">{{ customer.legacyCustomerId }}</span>
+          </th>
+          <td class="num" data-cy="top-customer-total">{{ customer.total | number: '1.2-2' }}</td>
+          <td class="num" data-cy="top-customer-share">{{ customer.share | percent: '1.0-1' }}</td>
+        </tr>
+      }
+    </tbody>
+  </table>
+</div>

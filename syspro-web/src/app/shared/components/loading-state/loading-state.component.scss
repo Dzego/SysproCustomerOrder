@@ -1,0 +1,30 @@
+:host {
+  display: block;
+}
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  min-height: 160px;
+  padding: var(--space-8) var(--space-4);
+  color: var(--color-text-muted);
+}
+
+.loading-state__spinner {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: loading-spin 0.8s linear infinite;
+}
+
+// With reduced motion the global rule shortens the animation to a single
+// frame, so the spinner becomes a static ring and the text carries the meaning.
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

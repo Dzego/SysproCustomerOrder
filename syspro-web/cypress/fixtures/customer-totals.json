@@ -1,0 +1,10 @@
+[
+  { "customerId": 11, "legacyCustomerId": "T000000011", "name": "Test Customer Alpha", "total": 1520.5 },
+  { "customerId": 12, "legacyCustomerId": "T000000012", "name": "Test Customer Bravo", "total": 980 },
+  { "customerId": 13, "legacyCustomerId": "T000000013", "name": "Test Customer Charlie", "total": 410.25 },
+  { "customerId": 14, "legacyCustomerId": "T000000014", "name": "Test Customer Delta", "total": 120 },
+  { "customerId": 15, "legacyCustomerId": "T000000015", "name": "Test Customer Echo", "total": 59.97 },
+  { "customerId": 16, "legacyCustomerId": "T000000016", "name": "Test Customer Foxtrot", "total": 15 },
+  { "customerId": 17, "legacyCustomerId": "T000000017", "name": "Test Customer Golf", "total": 0 },
+  { "customerId": 18, "legacyCustomerId": "T000000018", "name": "Test Customer Hotel", "total": 0 }
+]

@@ -1,0 +1,42 @@
+@use 'mixins' as *;
+
+:host {
+  display: block;
+}
+
+.date-range__fieldset {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+
+  @include from($breakpoint-md) {
+    grid-template-columns: minmax(10rem, 1.2fr) repeat(2, minmax(9rem, 1fr)) auto;
+  }
+}
+
+// On phones the period selector and the button each take a full row.
+.date-range__preset,
+.date-range__apply {
+  grid-column: 1 / -1;
+
+  @include from($breakpoint-md) {
+    grid-column: auto;
+  }
+}
+
+// Lines the button up with the inputs, below their labels.
+.date-range__apply {
+  @include from($breakpoint-md) {
+    margin-top: calc(var(--text-sm) * var(--leading-normal) + var(--space-1));
+  }
+}
+
+// The range error belongs to both dates, so it sits below the whole row.
+.date-range > .field__error {
+  margin-top: var(--space-2);
+}

@@ -1,3 +1,4 @@
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { Title } from '@angular/platform-browser';
 import { Router, RouterModule } from '@angular/router';
@@ -19,6 +20,9 @@ describe('AppRoutingModule routes', () => {
   beforeEach(async () => {
     TestBed.configureTestingModule({
       imports: [CoreModule, RouterModule.forRoot(appRoutes)],
+      // The dashboard requests data when it renders. The testing backend keeps
+      // that request in memory instead of sending it from jsdom.
+      providers: [provideHttpClientTesting()],
     });
     harness = await RouterTestingHarness.create();
   });

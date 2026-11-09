@@ -9,6 +9,12 @@ const pages = [
 ] as const;
 
 describe('Application navigation', () => {
+  // The dashboard loads customer totals when it renders. An empty list is
+  // enough here; dashboard.cy.ts covers the data itself.
+  beforeEach(() => {
+    cy.intercept({ method: 'GET', pathname: '/api/customers/totals' }, { body: [] });
+  });
+
   context('desktop', () => {
     it('redirects the root URL to the dashboard', () => {
       cy.visit('/');

@@ -1,0 +1,86 @@
+<form
+  class="date-range"
+  [formGroup]="form"
+  novalidate
+  data-cy="date-range-filter"
+  (ngSubmit)="onSubmit()"
+>
+  <fieldset class="date-range__fieldset">
+    <legend class="visually-hidden">Reporting period (UTC dates)</legend>
+
+    <div class="field date-range__preset">
+      <label class="field__label" [for]="idPrefix + '-preset'">Period</label>
+      <select
+        class="field__control"
+        formControlName="preset"
+        [id]="idPrefix + '-preset'"
+        data-cy="date-range-preset"
+        (change)="onPresetChange()"
+      >
+        @for (preset of presets; track preset.id) {
+          <option [value]="preset.id">{{ preset.label }}</option>
+        }
+        <option value="custom">Custom range</option>
+      </select>
+    </div>
+
+    @let fromError = fieldError('from');
+    <div class="field">
+      <label class="field__label" [for]="idPrefix + '-from'">From</label>
+      <input
+        class="field__control"
+        type="date"
+        formControlName="from"
+        [id]="idPrefix + '-from'"
+        [attr.aria-invalid]="fromError || rangeError ? 'true' : null"
+        [attr.aria-describedby]="
+          fromError ? idPrefix + '-from-error' : rangeError ? idPrefix + '-range-error' : null
+        "
+        data-cy="date-range-from"
+        (input)="onDateEdited()"
+      />
+      @if (fromError) {
+        <p class="field__error" [id]="idPrefix + '-from-error'" data-cy="date-range-from-error">
+          {{ fromError }}
+        </p>
+      }
+    </div>
+
+    @let toError = fieldError('to');
+    <div class="field">
+      <label class="field__label" [for]="idPrefix + '-to'">To</label>
+      <input
+        class="field__control"
+        type="date"
+        formControlName="to"
+        [id]="idPrefix + '-to'"
+        [attr.aria-invalid]="toError || rangeError ? 'true' : null"
+        [attr.aria-describedby]="
+          toError ? idPrefix + '-to-error' : rangeError ? idPrefix + '-range-error' : null
+        "
+        data-cy="date-range-to"
+        (input)="onDateEdited()"
+      />
+      @if (toError) {
+        <p class="field__error" [id]="idPrefix + '-to-error'" data-cy="date-range-to-error">
+          {{ toError }}
+        </p>
+      }
+    </div>
+
+    <button type="submit" class="btn btn--primary date-range__apply" data-cy="date-range-apply">
+      Apply
+    </button>
+  </fieldset>
+
+  @if (rangeError) {
+    <p
+      class="field__error"
+      [id]="idPrefix + '-range-error'"
+      role="alert"
+      data-cy="date-range-error"
+    >
+      {{ rangeError }}
+    </p>
+  }
+</form>

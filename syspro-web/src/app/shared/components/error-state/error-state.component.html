@@ -1,0 +1,37 @@
+<div class="error-state" role="alert" data-cy="error-state">
+  <svg
+    class="error-state__icon"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+    focusable="false"
+  >
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7.5v5.5" />
+    <path d="M12 16.5h.01" />
+  </svg>
+
+  <div class="error-state__body">
+    <h2 class="error-state__heading" data-cy="error-state-heading">{{ heading }}</h2>
+    <p class="error-state__message" data-cy="error-state-message">{{ message }}</p>
+    @if (traceId) {
+      <p class="error-state__trace" data-cy="error-state-trace">
+        Reference: <code>{{ traceId }}</code>
+      </p>
+    }
+    @if (retryable) {
+      <button
+        type="button"
+        class="btn btn--secondary error-state__retry"
+        data-cy="error-state-retry"
+        (click)="retry.emit()"
+      >
+        {{ retryLabel }}
+      </button>
+    }
+  </div>
+</div>
