@@ -1,0 +1,12 @@
+/* TypeScript settings for unit tests. Module resolution is inherited from the app
+   (bundler), so specs are type-checked exactly like production code; ts-jest only
+   transpiles each file to CommonJS. Type errors are caught by `npm run typecheck`. */
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./out-tsc/spec",
+    "esModuleInterop": true,
+    "types": ["jest"]
+  },
+  "include": ["src/**/*.spec.ts", "src/**/*.d.ts", "setup-jest.ts"]
+}
