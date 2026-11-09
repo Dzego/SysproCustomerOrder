@@ -1,0 +1,11 @@
+<div class="page-header">
+  <div class="page-header__text">
+    <h1 class="page-header__heading" data-cy="page-heading">{{ heading }}</h1>
+    @if (description) {
+      <p class="page-header__description">{{ description }}</p>
+    }
+  </div>
+  <div class="page-header__actions">
+    <ng-content />
+  </div>
+</div>

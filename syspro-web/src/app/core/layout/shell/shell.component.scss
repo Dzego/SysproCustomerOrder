@@ -1,0 +1,77 @@
+@use 'mixins' as *;
+
+:host {
+  display: block;
+}
+
+.shell {
+  min-height: 100vh;
+
+  @include from($breakpoint-lg) {
+    display: grid;
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  }
+}
+
+// Below the large breakpoint the sidebar is an off-canvas drawer. When closed it
+// is also `visibility: hidden`, which removes its links from the tab order and
+// the accessibility tree instead of leaving invisible focus targets.
+.shell__sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 30;
+  width: min(var(--sidebar-width), 85vw);
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition:
+    transform var(--transition-base),
+    visibility 0s linear var(--transition-base);
+
+  .shell--nav-open & {
+    transform: translateX(0);
+    visibility: visible;
+    box-shadow: var(--shadow-lg);
+    transition: transform var(--transition-base);
+  }
+
+  @include from($breakpoint-lg) {
+    position: sticky;
+    top: 0;
+    width: auto;
+    height: 100vh;
+    transform: none;
+    visibility: visible;
+    transition: none;
+
+    .shell--nav-open & {
+      box-shadow: none;
+    }
+  }
+}
+
+.shell__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: var(--backdrop);
+
+  @include from($breakpoint-lg) {
+    display: none;
+  }
+}
+
+.shell__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 100vh;
+}
+
+.shell__content {
+  flex: 1;
+  padding: var(--space-6) var(--page-gutter) var(--space-12);
+
+  @include from($breakpoint-md) {
+    padding: var(--space-8) var(--space-8) var(--space-12);
+  }
+}

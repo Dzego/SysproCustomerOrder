@@ -1,0 +1,22 @@
+// Shared breakpoints. Component stylesheets import this file with
+// `@use 'mixins' as *;` (resolved through stylePreprocessorOptions in angular.json).
+
+$breakpoint-md: 768px;
+$breakpoint-lg: 1024px;
+
+@mixin from($breakpoint) {
+  @media (min-width: $breakpoint) {
+    @content;
+  }
+}
+
+@mixin below($breakpoint) {
+  @media (max-width: ($breakpoint - 0.02px)) {
+    @content;
+  }
+}
+
+@mixin focus-ring {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}

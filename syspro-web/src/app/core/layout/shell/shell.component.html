@@ -1,0 +1,34 @@
+<a class="skip-link" href="#main-content" data-cy="skip-link" (click)="skipToContent($event)">
+  Skip to main content
+</a>
+
+<div class="shell" [class.shell--nav-open]="navOpen">
+  <app-sidebar class="shell__sidebar" id="app-sidebar" (navigate)="closeNav()" />
+
+  @if (navOpen) {
+    <div
+      class="shell__backdrop"
+      data-cy="nav-backdrop"
+      aria-hidden="true"
+      (click)="closeNav()"
+    ></div>
+  }
+
+  <div class="shell__body">
+    <app-topbar
+      [navOpen]="navOpen"
+      [environmentName]="config.environmentName"
+      (menuToggle)="toggleNav()"
+    />
+
+    <main
+      #mainContent
+      id="main-content"
+      class="shell__content"
+      tabindex="-1"
+      data-cy="main-content"
+    >
+      <router-outlet />
+    </main>
+  </div>
+</div>

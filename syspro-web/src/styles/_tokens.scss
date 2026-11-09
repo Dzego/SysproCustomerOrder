@@ -1,0 +1,136 @@
+// Design tokens. Components read these custom properties instead of hard-coding
+// values, so the theme (including dark mode) changes in one place.
+// Text colours meet WCAG AA contrast (4.5:1) on their intended surfaces.
+
+:root {
+  color-scheme: light;
+
+  // Typography: system font stacks, so no web-font download is needed.
+  --font-sans:
+    system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --font-numeric: tabular-nums;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  // Spacing (4px scale)
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+
+  // Shape and depth
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 6%), 0 1px 3px rgb(15 23 42 / 8%);
+  --shadow-md: 0 4px 12px rgb(15 23 42 / 8%), 0 2px 4px rgb(15 23 42 / 6%);
+  --shadow-lg: 0 16px 40px rgb(15 23 42 / 18%);
+
+  // Layout
+  --sidebar-width: 260px;
+  --topbar-height: 64px;
+  --content-max-width: 1280px;
+  --page-gutter: var(--space-4);
+
+  // Motion
+  --transition-fast: 150ms ease;
+  --transition-base: 220ms ease;
+
+  // Colour: surfaces and text
+  --color-bg: #f4f6fb;
+  --color-surface: #ffffff;
+  --color-surface-muted: #eef1f7;
+  --color-border: #dde3ec;
+  --color-border-strong: #c3ccda;
+  --color-text: #0f172a;
+  --color-text-muted: #556073;
+  --color-text-subtle: #6b7587;
+
+  // Colour: brand and status
+  --color-primary: #3b4fd8;
+  --color-primary-hover: #2f40b5;
+  --color-primary-soft: #eceffd;
+  --color-on-primary: #ffffff;
+  --color-focus: #3b4fd8;
+  --color-success: #0f7a4d;
+  --color-success-soft: #e3f4ec;
+  --color-warning: #94570a;
+  --color-warning-soft: #fcf1df;
+  --color-danger: #be1f2a;
+  --color-danger-soft: #fde9ea;
+  --color-info: #0a669c;
+  --color-info-soft: #e3f0f9;
+
+  // Colour: navigation
+  --sidebar-bg: #0f172a;
+  --sidebar-border: #1e293b;
+  --sidebar-text: #c2cbd9;
+  --sidebar-text-strong: #ffffff;
+  --sidebar-hover-bg: rgb(255 255 255 / 6%);
+  --sidebar-active-bg: rgb(139 156 255 / 16%);
+  --sidebar-accent: #8b9cff;
+  --backdrop: rgb(15 23 42 / 55%);
+}
+
+@mixin dark-theme {
+  color-scheme: dark;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-md: 0 4px 14px rgb(0 0 0 / 45%);
+  --shadow-lg: 0 16px 40px rgb(0 0 0 / 60%);
+
+  --color-bg: #0b1020;
+  --color-surface: #131a2c;
+  --color-surface-muted: #1a2237;
+  --color-border: #263049;
+  --color-border-strong: #36425f;
+  --color-text: #e7ebf3;
+  --color-text-muted: #a3adc0;
+  --color-text-subtle: #8c97ab;
+
+  --color-primary: #8b9cff;
+  --color-primary-hover: #a6b3ff;
+  --color-primary-soft: rgb(139 156 255 / 14%);
+  --color-on-primary: #0b1020;
+  --color-focus: #a6b3ff;
+  --color-success: #4cc38a;
+  --color-success-soft: rgb(76 195 138 / 14%);
+  --color-warning: #f0b45a;
+  --color-warning-soft: rgb(240 180 90 / 14%);
+  --color-danger: #f87178;
+  --color-danger-soft: rgb(248 113 120 / 14%);
+  --color-info: #5bb5ee;
+  --color-info-soft: rgb(91 181 238 / 14%);
+
+  --sidebar-bg: #090d1a;
+  --sidebar-border: #1a2237;
+  --backdrop: rgb(0 0 0 / 65%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    @include dark-theme;
+  }
+}
+
+:root[data-theme='dark'] {
+  @include dark-theme;
+}

@@ -1,0 +1,117 @@
+:host {
+  display: block;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+  color: var(--sidebar-text);
+}
+
+.sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: var(--topbar-height);
+  padding: 0 var(--space-5);
+  color: var(--sidebar-text-strong);
+  text-decoration: none;
+  border-bottom: 1px solid var(--sidebar-border);
+}
+
+.sidebar__logo {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, #5b6cff, #22b8cf);
+  color: #fff;
+  font-weight: var(--weight-bold);
+}
+
+.sidebar__brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.sidebar__brand-name {
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.06em;
+}
+
+.sidebar__brand-sub {
+  font-size: var(--text-xs);
+  color: var(--sidebar-text);
+}
+
+.sidebar__nav {
+  flex: 1;
+  padding: var(--space-4) var(--space-3);
+}
+
+.sidebar__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sidebar__link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--sidebar-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+
+  &:hover {
+    background: var(--sidebar-hover-bg);
+    color: var(--sidebar-text-strong);
+  }
+
+  &:focus-visible {
+    outline-color: var(--sidebar-accent);
+  }
+
+  &--active {
+    background: var(--sidebar-active-bg);
+    color: var(--sidebar-text-strong);
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 10px;
+      bottom: 10px;
+      width: 3px;
+      border-radius: var(--radius-pill);
+      background: var(--sidebar-accent);
+    }
+
+    .sidebar__icon {
+      color: var(--sidebar-accent);
+    }
+  }
+}
+
+.sidebar__icon {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
