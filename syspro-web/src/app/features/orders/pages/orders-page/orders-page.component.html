@@ -1,6 +1,44 @@
 <section class="page" data-cy="orders-page">
-  <app-page-header heading="Orders" description="Create orders and look up order details." />
-  <div class="card">
-    <p class="card__text">This page is implemented in Phase 4.</p>
-  </div>
+  <app-page-header heading="Orders" description="Create orders and look up order details.">
+    <a class="btn btn--primary" routerLink="/orders/new" data-cy="orders-new">New order</a>
+  </app-page-header>
+
+  <section class="card" aria-labelledby="lookup-heading">
+    <h2 id="lookup-heading" class="card__title">Look up an order</h2>
+    <form
+      class="lookup"
+      [formGroup]="form"
+      novalidate
+      data-cy="order-lookup-form"
+      (ngSubmit)="lookUp()"
+    >
+      @let error = orderIdError;
+      <div class="field">
+        <label class="field__label" for="order-id">Order number</label>
+        <input
+          id="order-id"
+          class="field__control field__control--narrow"
+          type="number"
+          inputmode="numeric"
+          min="1"
+          step="1"
+          [max]="maxId"
+          formControlName="orderId"
+          [attr.aria-invalid]="error ? 'true' : null"
+          [attr.aria-errormessage]="error ? 'order-id-error' : null"
+          data-cy="order-lookup-id"
+        />
+        @if (error) {
+          <p class="field__error" id="order-id-error" data-cy="order-lookup-error">{{ error }}</p>
+        }
+      </div>
+      <button type="submit" class="btn btn--secondary" data-cy="order-lookup-submit">
+        Look up
+      </button>
+    </form>
+    <p class="field__hint lookup__hint">
+      The order number is shown after an order is created. The API does not provide a list of
+      orders.
+    </p>
+  </section>
 </section>

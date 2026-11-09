@@ -1,0 +1,45 @@
+@if (vm$ | async; as vm) {
+  <section class="page" data-cy="order-detail-page">
+    <app-page-header
+      heading="Order details"
+      description="An order and its lines, as stored by the API."
+    >
+      <a class="btn btn--ghost" routerLink="/orders" data-cy="order-detail-back"
+        >Look up another order</a
+      >
+      <a class="btn btn--primary" routerLink="/orders/new" data-cy="order-detail-new">New order</a>
+    </app-page-header>
+
+    <div [attr.aria-busy]="vm.state.status === 'loading'" class="order-detail__content">
+      @if (vm.state.status === 'loading') {
+        <app-loading-state [label]="'Loading order ' + vm.orderId + '…'" />
+      } @else if (vm.state.status === 'error') {
+        @if (vm.state.error.kind === 'not-found') {
+          <div class="card">
+            <app-empty-state heading="Order not found" [message]="notFoundMessage(vm.state.error)">
+              <a class="btn btn--primary" routerLink="/orders" data-cy="order-not-found-lookup">
+                Look up another order
+              </a>
+            </app-empty-state>
+          </div>
+        } @else {
+          <app-error-state
+            heading="The order could not be loaded"
+            [message]="vm.state.error.message"
+            [traceId]="vm.state.error.traceId"
+            [retryable]="isRetryable(vm.state.error)"
+            (retry)="reload()"
+          />
+        }
+      } @else {
+        @if (justCreated) {
+          <div class="alert alert--success" role="status" data-cy="order-created">
+            <p class="alert__title">Order {{ vm.state.data.id }} was created.</p>
+            <p>These details were read back from the server after saving.</p>
+          </div>
+        }
+        <app-order-summary [order]="vm.state.data" />
+      }
+    </div>
+  </section>
+}

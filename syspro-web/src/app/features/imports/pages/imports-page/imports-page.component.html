@@ -1,9 +1,122 @@
-<section class="page" data-cy="imports-page">
-  <app-page-header
-    heading="Customer imports"
-    description="Start a customer import from the legacy file and follow its progress."
-  />
-  <div class="card">
-    <p class="card__text">This page is implemented in Phase 4.</p>
-  </div>
-</section>
+@if (vm$ | async; as vm) {
+  <section class="page" data-cy="imports-page">
+    <app-page-header
+      heading="Customer imports"
+      description="Start a customer import from the legacy file and follow its progress."
+    />
+
+    <div class="grid grid--2 imports__actions">
+      <section class="card imports__card" aria-labelledby="start-heading">
+        <h2 id="start-heading" class="card__title">Start an import</h2>
+        <p class="card__text">
+          Reads the legacy customer file on the server. New customers are created and existing ones
+          updated, matched by legacy customer ID. Imports run in the background, one at a time.
+        </p>
+        <div>
+          <button
+            type="button"
+            class="btn btn--primary"
+            [disabled]="vm.starting"
+            [attr.aria-busy]="vm.starting"
+            data-cy="import-start"
+            (click)="startImport()"
+          >
+            {{ vm.starting ? 'Starting…' : 'Start customer import' }}
+          </button>
+        </div>
+        @if (vm.startError; as error) {
+          <app-error-state
+            heading="The import could not be started"
+            [message]="error.message"
+            [traceId]="error.traceId"
+            [retryable]="isRetryable(error)"
+            (retry)="startImport()"
+          />
+        }
+      </section>
+
+      <section class="card imports__card" aria-labelledby="lookup-job-heading">
+        <h2 id="lookup-job-heading" class="card__title">Find a job</h2>
+        <form
+          class="lookup"
+          [formGroup]="lookupForm"
+          novalidate
+          data-cy="import-lookup-form"
+          (ngSubmit)="lookUp()"
+        >
+          @let idError = lookupIdError;
+          <div class="field">
+            <label class="field__label" for="import-job-id">Job ID</label>
+            <input
+              id="import-job-id"
+              class="field__control field__control--narrow"
+              type="number"
+              inputmode="numeric"
+              min="1"
+              step="1"
+              [max]="maxId"
+              formControlName="jobId"
+              [attr.aria-invalid]="idError ? 'true' : null"
+              [attr.aria-errormessage]="idError ? 'import-job-id-error' : null"
+              data-cy="import-lookup-id"
+            />
+            @if (idError) {
+              <p class="field__error" id="import-job-id-error" data-cy="import-lookup-error">
+                {{ idError }}
+              </p>
+            }
+          </div>
+          <button
+            type="submit"
+            class="btn btn--secondary"
+            [disabled]="vm.lookingUp"
+            data-cy="import-lookup-submit"
+          >
+            {{ vm.lookingUp ? 'Finding…' : 'Find' }}
+          </button>
+        </form>
+        @if (vm.lookupError; as error) {
+          @if (error.kind === 'not-found') {
+            <p class="alert alert--warning" role="alert" data-cy="import-lookup-not-found">
+              {{ error.message }}
+            </p>
+          } @else {
+            <app-error-state
+              heading="The job could not be loaded"
+              [message]="error.message"
+              [traceId]="error.traceId"
+              [retryable]="false"
+            />
+          }
+        }
+      </section>
+    </div>
+
+    @if (vm.selected; as selected) {
+      <app-import-job-details
+        [tracked]="selected"
+        [canStart]="!vm.starting"
+        (resumeUpdates)="resume($event)"
+        (startNew)="startImport()"
+      />
+    }
+
+    <section class="card" aria-labelledby="jobs-heading">
+      <h2 id="jobs-heading" class="card__title">Jobs in this session</h2>
+      @if (vm.jobs.length === 0) {
+        <app-empty-state
+          heading="No import jobs yet"
+          [headingLevel]="3"
+          message="Jobs you start or find appear here. The API does not list earlier jobs, so look one up by its ID."
+        />
+      } @else {
+        <app-import-job-list
+          [jobs]="vm.jobs"
+          [selectedId]="vm.selected?.id ?? null"
+          (selectJob)="select($event)"
+          (forgetJob)="forget($event)"
+        />
+      }
+    </section>
+  </section>
+}

@@ -1,9 +1,218 @@
-<section class="page" data-cy="customers-page">
-  <app-page-header
-    heading="Customer spending"
-    description="Order totals per customer for a selected date range."
-  />
-  <div class="card">
-    <p class="card__text">This page is implemented in Phase 4.</p>
-  </div>
-</section>
+@if (vm$ | async; as vm) {
+  <section class="page" data-cy="customers-page">
+    <app-page-header
+      heading="Customer spending"
+      description="Order totals per customer for a selected date range, including customers without orders."
+    >
+      <button
+        type="button"
+        class="btn btn--secondary"
+        data-cy="customers-refresh"
+        (click)="reload()"
+      >
+        Refresh
+      </button>
+    </app-page-header>
+
+    <div class="card">
+      <app-date-range-filter
+        idPrefix="customers-range"
+        [range]="vm.range"
+        [today]="today"
+        (rangeChange)="onRangeChange($event)"
+      />
+      <p class="customers__note" data-cy="customers-period">
+        Showing {{ vm.range.from | date: 'd MMM y' }} to {{ vm.range.to | date: 'd MMM y' }} (UTC
+        dates, both days included). Totals add order lines in every currency as stored, without
+        conversion.
+      </p>
+    </div>
+
+    <p class="visually-hidden" role="status" data-cy="customers-announcement">
+      @if (vm.page) {
+        {{ vm.page.matchCount }} {{ vm.page.matchCount === 1 ? 'customer' : 'customers' }} shown.
+      }
+    </p>
+
+    <div class="customers__content" [attr.aria-busy]="vm.state.status === 'loading'">
+      @if (vm.state.status === 'loading') {
+        <app-loading-state label="Loading customer spending…" />
+      } @else if (vm.state.status === 'error') {
+        <app-error-state
+          heading="Customer spending could not be loaded"
+          [message]="vm.state.error.message"
+          [traceId]="vm.state.error.traceId"
+          [retryable]="isRetryable(vm.state.error)"
+          (retry)="reload()"
+        />
+      } @else if (vm.page; as page) {
+        @if (page.totalCount === 0) {
+          <div class="card">
+            <app-empty-state
+              heading="No customers yet"
+              message="Customers appear here once they have been imported."
+            >
+              <a class="btn btn--primary" routerLink="/imports" data-cy="customers-go-imports">
+                Go to customer imports
+              </a>
+            </app-empty-state>
+          </div>
+        } @else {
+          <section class="card" aria-labelledby="customers-table-heading">
+            <h2 id="customers-table-heading" class="visually-hidden">Customers</h2>
+
+            <form
+              class="customers__filters"
+              [formGroup]="filterForm"
+              novalidate
+              data-cy="customers-filters"
+              (submit)="$event.preventDefault()"
+            >
+              <div class="field customers__search">
+                <label class="field__label" for="customers-search">Search</label>
+                <input
+                  id="customers-search"
+                  class="field__control"
+                  type="search"
+                  formControlName="search"
+                  placeholder="Name or legacy customer ID"
+                  autocomplete="off"
+                  data-cy="customers-search"
+                />
+              </div>
+              <div class="field">
+                <label class="field__label" for="customers-sort">Sort by</label>
+                <select
+                  id="customers-sort"
+                  class="field__control"
+                  formControlName="sort"
+                  data-cy="customers-sort"
+                >
+                  @for (sort of sorts; track sort.id) {
+                    <option [ngValue]="sort.id">{{ sort.label }}</option>
+                  }
+                </select>
+              </div>
+              <div class="field">
+                <label class="field__label" for="customers-page-size">Rows per page</label>
+                <select
+                  id="customers-page-size"
+                  class="field__control"
+                  formControlName="pageSize"
+                  data-cy="customers-page-size"
+                >
+                  @for (size of pageSizes; track size) {
+                    <option [ngValue]="size">{{ size }}</option>
+                  }
+                </select>
+              </div>
+              <label class="choice__option customers__toggle">
+                <input type="checkbox" formControlName="hideZero" data-cy="customers-hide-zero" />
+                Hide customers without orders ({{ page.zeroCount | number }})
+              </label>
+            </form>
+
+            @if (page.matchCount === 0) {
+              <app-empty-state
+                heading="No matching customers"
+                [headingLevel]="3"
+                [message]="
+                  vm.filters.hideZero && !vm.filters.search
+                    ? 'No customer has orders in the selected dates. Try a longer period.'
+                    : 'No customer matches the search and filters.'
+                "
+              >
+                <button
+                  type="button"
+                  class="btn btn--secondary"
+                  data-cy="customers-clear-filters"
+                  (click)="clearFilters()"
+                >
+                  Clear filters
+                </button>
+              </app-empty-state>
+            } @else {
+              <p class="customers__count" data-cy="customers-count">
+                Showing {{ page.firstRow | number }}–{{ page.lastRow | number }} of
+                {{ page.matchCount | number }}
+                @if (page.matchCount !== page.totalCount) {
+                  (filtered from {{ page.totalCount | number }})
+                }
+              </p>
+
+              <div class="table-wrap" role="region" aria-label="Customer spending" tabindex="0">
+                <table class="table" data-cy="customers-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Customer</th>
+                      <th scope="col" class="num">Customer number</th>
+                      <th scope="col" class="num">Order value</th>
+                      <th scope="col"><span class="visually-hidden">Actions</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (customer of page.rows; track customer.customerId) {
+                      <tr data-cy="customer-row">
+                        <th scope="row">
+                          <span data-cy="customer-name">{{ customer.name }}</span>
+                          <span class="table__sub" data-cy="customer-legacy-id">{{
+                            customer.legacyCustomerId
+                          }}</span>
+                        </th>
+                        <td class="num">{{ customer.customerId }}</td>
+                        <td class="num" data-cy="customer-total">
+                          @if (customer.total === 0) {
+                            <span class="badge badge--warning">No orders</span>
+                          } @else {
+                            {{ formatAmount(customer.total) }}
+                          }
+                        </td>
+                        <td class="customers__actions">
+                          <a
+                            class="btn btn--ghost"
+                            routerLink="/orders/new"
+                            [queryParams]="{ customer: customer.legacyCustomerId }"
+                            [attr.aria-label]="'New order for ' + customer.name"
+                            data-cy="customer-new-order"
+                          >
+                            New order
+                          </a>
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+
+              @if (page.pageCount > 1) {
+                <nav class="pager" aria-label="Customer pages" data-cy="customers-pager">
+                  <button
+                    type="button"
+                    class="btn btn--secondary"
+                    [disabled]="page.pageIndex === 0"
+                    data-cy="customers-prev"
+                    (click)="goToPage(page.pageIndex - 1)"
+                  >
+                    Previous
+                  </button>
+                  <span class="pager__status" data-cy="customers-page-status">
+                    Page {{ page.pageIndex + 1 }} of {{ page.pageCount }}
+                  </span>
+                  <button
+                    type="button"
+                    class="btn btn--secondary"
+                    [disabled]="page.pageIndex === page.pageCount - 1"
+                    data-cy="customers-next"
+                    (click)="goToPage(page.pageIndex + 1)"
+                  >
+                    Next
+                  </button>
+                </nav>
+              }
+            }
+          </section>
+        }
+      }
+    </div>
+  </section>
+}

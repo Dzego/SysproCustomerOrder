@@ -1,0 +1,138 @@
+@use 'mixins' as *;
+
+:host {
+  display: block;
+}
+
+.order-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+
+  &__body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  &__section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  &__section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  &__footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+
+  &__total {
+    font-size: var(--text-lg);
+    font-variant-numeric: var(--font-numeric);
+  }
+}
+
+.suggestions {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+
+  &__item {
+    display: flex;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    border: 0;
+    background: var(--color-surface);
+    font-size: var(--text-sm);
+    text-align: left;
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible {
+      background: var(--color-primary-soft);
+    }
+
+    &:focus-visible {
+      @include focus-ring;
+    }
+  }
+
+  &__id {
+    font-family: var(--font-mono);
+    color: var(--color-text-muted);
+  }
+}
+
+.items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  &__fieldset {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+    margin: 0;
+    padding: var(--space-4);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-muted);
+
+    @include from($breakpoint-md) {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    @include from($breakpoint-lg) {
+      grid-template-columns: minmax(7rem, 1fr) minmax(10rem, 2fr) 6rem 8rem 9rem auto;
+      align-items: start;
+    }
+  }
+
+  &__legend {
+    padding: 0 var(--space-1);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
+  }
+
+  &__total {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  &__total-value {
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    font-variant-numeric: var(--font-numeric);
+  }
+
+  &__remove {
+    align-self: end;
+  }
+}

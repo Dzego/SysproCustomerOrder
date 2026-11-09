@@ -1,0 +1,9 @@
+:host {
+  display: block;
+}
+
+.imports__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}

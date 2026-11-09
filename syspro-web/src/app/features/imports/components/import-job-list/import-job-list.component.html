@@ -1,0 +1,64 @@
+<div class="table-wrap" role="region" aria-label="Followed import jobs" tabindex="0">
+  <table class="table" data-cy="import-job-list">
+    <thead>
+      <tr>
+        <th scope="col">Job</th>
+        <th scope="col">Status</th>
+        <th scope="col" class="num">Processed</th>
+        <th scope="col" class="num">Created</th>
+        <th scope="col" class="num">Updated</th>
+        <th scope="col" class="num">Rejected</th>
+        <th scope="col"><span class="visually-hidden">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (tracked of jobs; track tracked.id) {
+        <tr
+          data-cy="import-job-row"
+          [attr.aria-current]="tracked.id === selectedId ? 'true' : null"
+        >
+          <th scope="row">
+            <button
+              type="button"
+              class="btn btn--ghost"
+              [attr.aria-pressed]="tracked.id === selectedId"
+              data-cy="import-job-select"
+              (click)="selectJob.emit(tracked.id)"
+            >
+              Job {{ tracked.id }}
+            </button>
+          </th>
+          <td>
+            @if (tracked.job; as job) {
+              <span
+                class="badge"
+                [ngClass]="'badge--' + tones[job.status]"
+                data-cy="import-job-row-status"
+                >{{ job.status }}</span
+              >
+            } @else if (tracked.error?.kind === 'not-found') {
+              <span class="badge badge--danger" data-cy="import-job-row-status">Not found</span>
+            } @else {
+              <span class="table__sub">Loading…</span>
+            }
+          </td>
+          <td class="num">{{ tracked.job?.processed ?? '–' }}</td>
+          <td class="num">{{ tracked.job?.created ?? '–' }}</td>
+          <td class="num">{{ tracked.job?.updated ?? '–' }}</td>
+          <td class="num">{{ tracked.job?.failed ?? '–' }}</td>
+          <td>
+            <button
+              type="button"
+              class="btn btn--ghost"
+              [attr.aria-label]="'Stop following job ' + tracked.id"
+              data-cy="import-job-forget"
+              (click)="forgetJob.emit(tracked.id)"
+            >
+              Remove
+            </button>
+          </td>
+        </tr>
+      }
+    </tbody>
+  </table>
+</div>

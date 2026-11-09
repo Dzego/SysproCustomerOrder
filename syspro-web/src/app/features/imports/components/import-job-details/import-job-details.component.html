@@ -1,0 +1,134 @@
+<section class="card job" aria-labelledby="job-heading" data-cy="import-job-details">
+  <div class="job__header">
+    <h2 id="job-heading" class="card__title">
+      Import job <span data-cy="import-job-id">{{ tracked.id }}</span>
+    </h2>
+    @if (tracked.job; as job) {
+      <span class="badge" [ngClass]="'badge--' + tones[job.status]" data-cy="import-job-status">{{
+        job.status
+      }}</span>
+    }
+    @if (tracked.polling) {
+      <span class="job__live" data-cy="import-job-live">
+        <span class="job__pulse" aria-hidden="true"></span> Updating automatically
+      </span>
+    }
+  </div>
+
+  @if (tracked.job; as job) {
+    <p class="job__summary" role="status" data-cy="import-job-summary">{{ describeJob(job) }}</p>
+
+    @if (job.status === 'Processing' || job.status === 'Pending') {
+      <!-- The API does not report how many lines the file has, so progress is
+           shown as committed lines rather than a percentage. -->
+      <div
+        class="job__progress"
+        role="progressbar"
+        aria-label="Import progress"
+        [attr.aria-valuetext]="job.processed + ' lines committed'"
+      >
+        <span class="job__progress-bar"></span>
+      </div>
+    }
+
+    <dl class="details job__counts" data-cy="import-job-counts">
+      <div>
+        <dt class="details__term">Processed</dt>
+        <dd class="details__value" data-cy="import-job-processed">{{ job.processed | number }}</dd>
+      </div>
+      <div>
+        <dt class="details__term">Created</dt>
+        <dd class="details__value" data-cy="import-job-created">{{ job.created | number }}</dd>
+      </div>
+      <div>
+        <dt class="details__term">Updated</dt>
+        <dd class="details__value" data-cy="import-job-updated">{{ job.updated | number }}</dd>
+      </div>
+      <div>
+        <dt class="details__term">Rejected lines</dt>
+        <dd class="details__value" data-cy="import-job-failed">{{ job.failed | number }}</dd>
+      </div>
+    </dl>
+
+    <dl class="details job__times">
+      <div>
+        <dt class="details__term">Created (UTC)</dt>
+        <dd class="details__value" data-cy="import-job-created-at">
+          {{ parseUtc(job.createdAt) | date: 'd MMM y, HH:mm:ss' : 'UTC' }}
+        </dd>
+      </div>
+      <div>
+        <dt class="details__term">Started (UTC)</dt>
+        <dd class="details__value" data-cy="import-job-started-at">
+          @if (job.startedAt) {
+            {{ parseUtc(job.startedAt) | date: 'd MMM y, HH:mm:ss' : 'UTC' }}
+          } @else {
+            Not started
+          }
+        </dd>
+      </div>
+      <div>
+        <dt class="details__term">Finished (UTC)</dt>
+        <dd class="details__value" data-cy="import-job-completed-at">
+          @if (job.completedAt) {
+            {{ parseUtc(job.completedAt) | date: 'd MMM y, HH:mm:ss' : 'UTC' }}
+          } @else {
+            Not finished
+          }
+        </dd>
+      </div>
+    </dl>
+
+    @if (job.failed > 0) {
+      <p class="field__hint" data-cy="import-job-rejected-note">
+        Rejected lines were skipped and recorded on the server. The API does not return the
+        individual line errors.
+      </p>
+    }
+
+    @if (job.status === 'Failed') {
+      <div class="alert alert--danger" role="alert" data-cy="import-job-failure">
+        <p class="alert__title">The import failed.</p>
+        <p data-cy="import-job-failure-reason">
+          {{ job.failureReason || 'No reason was recorded.' }}
+        </p>
+        <p>
+          A failed job cannot be restarted. A new import reads the file from the start; customers
+          already imported are updated, not duplicated.
+        </p>
+        <div>
+          <button
+            type="button"
+            class="btn btn--primary"
+            [disabled]="!canStart"
+            data-cy="import-job-start-new"
+            (click)="startNew.emit()"
+          >
+            Start a new import
+          </button>
+        </div>
+      </div>
+    }
+  } @else if (!tracked.error) {
+    <app-loading-state label="Loading the job's status…" />
+  }
+
+  @if (tracked.error; as error) {
+    @if (error.kind === 'not-found') {
+      <app-empty-state heading="Job not found" [headingLevel]="3" [message]="error.message" />
+    } @else if (tracked.polling) {
+      <p class="alert alert--warning" role="status" data-cy="import-job-poll-warning">
+        The latest status could not be loaded ({{ error.message }}). Trying again.
+      </p>
+    } @else if (!tracked.job || !isTerminalJob(tracked.job)) {
+      <app-error-state
+        heading="Updates stopped"
+        [message]="error.message"
+        [traceId]="error.traceId"
+        [retryable]="isRetryable(error)"
+        retryLabel="Resume updates"
+        (retry)="resumeUpdates.emit(tracked.id)"
+      />
+    }
+  }
+</section>

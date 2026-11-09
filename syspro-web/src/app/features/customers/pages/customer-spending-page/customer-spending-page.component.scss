@@ -1,0 +1,61 @@
+@use 'mixins' as *;
+
+:host {
+  display: block;
+}
+
+.customers {
+  &__note {
+    margin-top: var(--space-4);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+
+  &__content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+  }
+
+  &__filters {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--space-3) var(--space-4);
+    align-items: end;
+    margin-bottom: var(--space-4);
+
+    @include from($breakpoint-md) {
+      grid-template-columns: minmax(12rem, 2fr) minmax(10rem, 1fr) minmax(7rem, 0.6fr);
+    }
+  }
+
+  &__toggle {
+    @include from($breakpoint-md) {
+      grid-column: 1 / -1;
+    }
+  }
+
+  &__count {
+    margin-bottom: var(--space-3);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+
+  &__actions {
+    text-align: right;
+    white-space: nowrap;
+  }
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+
+  &__status {
+    font-size: var(--text-sm);
+    font-variant-numeric: var(--font-numeric);
+  }
+}

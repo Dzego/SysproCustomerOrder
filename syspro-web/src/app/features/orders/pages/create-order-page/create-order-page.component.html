@@ -1,0 +1,404 @@
+@let submitting = (submitting$ | async) === true;
+<section class="page" data-cy="create-order-page">
+  <app-page-header
+    heading="New order"
+    description="Record an order for an existing customer. The order date is set by the server, in UTC, when the order is saved."
+  >
+    <a class="btn btn--ghost" routerLink="/orders" data-cy="create-order-cancel">Back to orders</a>
+  </app-page-header>
+
+  <form
+    class="order-form"
+    [formGroup]="form"
+    novalidate
+    data-cy="create-order-form"
+    [attr.aria-busy]="submitting"
+    (ngSubmit)="onSubmit()"
+  >
+    @let error = submitError$ | async;
+    @if (error) {
+      @if (error.kind === 'validation' || error.kind === 'not-found') {
+        <div class="alert alert--danger" role="alert" data-cy="create-order-error-summary">
+          <p class="alert__title">The order was not saved.</p>
+          <p data-cy="create-order-error-message">{{ error.message }}</p>
+          @if (formErrors.length > 0) {
+            <ul class="alert__list">
+              @for (message of formErrors; track $index) {
+                <li data-cy="create-order-form-error">{{ message }}</li>
+              }
+            </ul>
+          }
+          <p>Correct the highlighted fields and try again.</p>
+        </div>
+      } @else {
+        <app-error-state
+          heading="The order was not saved"
+          [message]="error.message"
+          [traceId]="error.traceId"
+          [retryable]="isRetryable(error)"
+          retryLabel="Try saving again"
+          (retry)="onSubmit()"
+        />
+      }
+    } @else if (submitAttempted && form.invalid) {
+      <div class="alert alert--danger" role="alert" data-cy="create-order-invalid">
+        <p class="alert__title">Check the highlighted fields.</p>
+      </div>
+    }
+
+    <!-- A disabled fieldset disables every control inside it while the request runs. -->
+    <fieldset class="order-form__body" [disabled]="submitting">
+      <legend class="visually-hidden">Order</legend>
+
+      <section class="card order-form__section" aria-labelledby="customer-heading">
+        <h2 id="customer-heading" class="card__title">Customer</h2>
+
+        <fieldset class="choice" data-cy="customer-mode">
+          <legend class="field__label">Identify the customer by</legend>
+          <label class="choice__option">
+            <input
+              type="radio"
+              formControlName="customerMode"
+              value="legacy"
+              data-cy="customer-mode-legacy"
+            />
+            Legacy customer ID
+          </label>
+          <label class="choice__option">
+            <input
+              type="radio"
+              formControlName="customerMode"
+              value="id"
+              data-cy="customer-mode-id"
+            />
+            Customer number
+          </label>
+        </fieldset>
+
+        @if (form.controls.customerMode.value === 'legacy') {
+          @let legacyError = fieldError(form.controls.legacyCustomerId);
+          <div class="field">
+            <label class="field__label" for="legacy-customer-id">Legacy customer ID</label>
+            <input
+              id="legacy-customer-id"
+              class="field__control field__control--narrow"
+              formControlName="legacyCustomerId"
+              autocomplete="off"
+              [attr.maxlength]="limits.legacyCustomerIdMaxLength"
+              [attr.aria-invalid]="legacyError ? 'true' : null"
+              aria-describedby="customer-hint"
+              [attr.aria-errormessage]="legacyError ? 'legacy-customer-id-error' : null"
+              data-cy="legacy-customer-id"
+            />
+            @if (legacyError) {
+              <p
+                class="field__error"
+                id="legacy-customer-id-error"
+                data-cy="legacy-customer-id-error"
+              >
+                {{ legacyError }}
+              </p>
+            }
+          </div>
+
+          @let suggestions = suggestions$ | async;
+          @if (suggestions && suggestions.length > 0) {
+            <ul class="suggestions" aria-label="Matching customers" data-cy="customer-suggestions">
+              @for (customer of suggestions; track customer.customerId) {
+                <li>
+                  <button
+                    type="button"
+                    class="suggestions__item"
+                    data-cy="customer-suggestion"
+                    (click)="chooseSuggestion(customer)"
+                  >
+                    <span class="suggestions__id">{{ customer.legacyCustomerId }}</span>
+                    <span>{{ customer.name }}</span>
+                  </button>
+                </li>
+              }
+            </ul>
+          }
+        } @else {
+          @let idError = fieldError(form.controls.customerId);
+          <div class="field">
+            <label class="field__label" for="customer-id">Customer number</label>
+            <input
+              id="customer-id"
+              class="field__control field__control--narrow"
+              type="number"
+              inputmode="numeric"
+              min="1"
+              step="1"
+              formControlName="customerId"
+              [attr.aria-invalid]="idError ? 'true' : null"
+              aria-describedby="customer-hint"
+              [attr.aria-errormessage]="idError ? 'customer-id-error' : null"
+              data-cy="customer-id"
+            />
+            @if (idError) {
+              <p class="field__error" id="customer-id-error" data-cy="customer-id-error">
+                {{ idError }}
+              </p>
+            }
+          </div>
+        }
+
+        <p id="customer-hint" class="field__hint" aria-live="polite" data-cy="customer-hint">
+          @let match = (customerMatch$ | async) ?? noMatch;
+          @let directory = directory$ | async;
+          @if (match.status === 'found') {
+            Customer: <strong data-cy="customer-match">{{ match.customer.name }}</strong> ({{
+              match.customer.legacyCustomerId
+            }}, customer number {{ match.customer.customerId }})
+          } @else if (match.status === 'unknown') {
+            <span data-cy="customer-unknown">No customer with this identifier is on file.</span>
+          } @else if (directory?.status === 'error') {
+            <span data-cy="customer-directory-error">
+              Customer names could not be loaded. You can still enter an identifier.
+            </span>
+          } @else {
+            Enter the identifier from the customer import.
+          }
+        </p>
+      </section>
+
+      <section class="card order-form__section" aria-labelledby="details-heading">
+        <h2 id="details-heading" class="card__title">Order details</h2>
+
+        <div class="grid grid--2">
+          @let currencyError = fieldError(form.controls.currency);
+          <div class="field">
+            <label class="field__label" for="currency">Currency</label>
+            <input
+              id="currency"
+              class="field__control field__control--narrow field__control--upper"
+              formControlName="currency"
+              list="currency-options"
+              maxlength="3"
+              autocomplete="off"
+              aria-describedby="currency-hint"
+              [attr.aria-invalid]="currencyError ? 'true' : null"
+              [attr.aria-errormessage]="currencyError ? 'currency-error' : null"
+              data-cy="currency"
+            />
+            <datalist id="currency-options">
+              @for (code of currencies; track code) {
+                <option [value]="code"></option>
+              }
+            </datalist>
+            <p id="currency-hint" class="field__hint">Three-letter ISO 4217 code.</p>
+            @if (currencyError) {
+              <p class="field__error" id="currency-error" data-cy="currency-error">
+                {{ currencyError }}
+              </p>
+            }
+          </div>
+
+          @let statusError = fieldError(form.controls.status);
+          <div class="field">
+            <label class="field__label" for="status">Status</label>
+            <input
+              id="status"
+              class="field__control"
+              formControlName="status"
+              list="status-options"
+              autocomplete="off"
+              [attr.maxlength]="limits.statusMaxLength"
+              aria-describedby="status-hint"
+              [attr.aria-invalid]="statusError ? 'true' : null"
+              [attr.aria-errormessage]="statusError ? 'status-error' : null"
+              data-cy="status"
+            />
+            <datalist id="status-options">
+              @for (status of statuses; track status) {
+                <option [value]="status"></option>
+              }
+            </datalist>
+            <p id="status-hint" class="field__hint">
+              Free text, up to {{ limits.statusMaxLength }} characters. The suggestions are common
+              values.
+            </p>
+            @if (statusError) {
+              <p class="field__error" id="status-error" data-cy="status-error">{{ statusError }}</p>
+            }
+          </div>
+        </div>
+      </section>
+
+      <section
+        class="card order-form__section"
+        aria-labelledby="items-heading"
+        formArrayName="items"
+      >
+        <div class="order-form__section-header">
+          <h2 id="items-heading" class="card__title">Items</h2>
+          <span class="badge badge--info" data-cy="item-count">
+            {{ items.length }} {{ items.length === 1 ? 'line' : 'lines' }}
+          </span>
+        </div>
+
+        @let itemsError = fieldError(form.controls.items);
+        @if (itemsError) {
+          <p class="field__error" data-cy="items-error">{{ itemsError }}</p>
+        }
+
+        <ol class="items" role="list">
+          @for (item of items; track item; let i = $index) {
+            <li class="item" [formGroupName]="i" data-cy="order-item">
+              <fieldset class="item__fieldset">
+                <legend class="item__legend">Line {{ i + 1 }}</legend>
+
+                @let skuError = fieldError(item.controls.sku);
+                <div class="field item__sku">
+                  <label class="field__label" [for]="'sku-' + i">SKU</label>
+                  <input
+                    class="field__control"
+                    [id]="'sku-' + i"
+                    formControlName="sku"
+                    autocomplete="off"
+                    [attr.maxlength]="limits.skuMaxLength"
+                    [attr.aria-invalid]="skuError ? 'true' : null"
+                    [attr.aria-errormessage]="skuError ? 'sku-' + i + '-error' : null"
+                    data-cy="item-sku"
+                  />
+                  @if (skuError) {
+                    <p class="field__error" [id]="'sku-' + i + '-error'" data-cy="item-sku-error">
+                      {{ skuError }}
+                    </p>
+                  }
+                </div>
+
+                @let descriptionError = fieldError(item.controls.description);
+                <div class="field item__description">
+                  <label class="field__label" [for]="'description-' + i">
+                    Description <span class="field__optional">(optional)</span>
+                  </label>
+                  <input
+                    class="field__control"
+                    [id]="'description-' + i"
+                    formControlName="description"
+                    autocomplete="off"
+                    [attr.maxlength]="limits.descriptionMaxLength"
+                    [attr.aria-invalid]="descriptionError ? 'true' : null"
+                    [attr.aria-errormessage]="
+                      descriptionError ? 'description-' + i + '-error' : null
+                    "
+                    data-cy="item-description"
+                  />
+                  @if (descriptionError) {
+                    <p
+                      class="field__error"
+                      [id]="'description-' + i + '-error'"
+                      data-cy="item-description-error"
+                    >
+                      {{ descriptionError }}
+                    </p>
+                  }
+                </div>
+
+                @let quantityError = fieldError(item.controls.quantity);
+                <div class="field item__quantity">
+                  <label class="field__label" [for]="'quantity-' + i">Quantity</label>
+                  <input
+                    class="field__control"
+                    type="number"
+                    inputmode="numeric"
+                    min="1"
+                    step="1"
+                    [id]="'quantity-' + i"
+                    formControlName="quantity"
+                    [attr.aria-invalid]="quantityError ? 'true' : null"
+                    [attr.aria-errormessage]="quantityError ? 'quantity-' + i + '-error' : null"
+                    data-cy="item-quantity"
+                  />
+                  @if (quantityError) {
+                    <p
+                      class="field__error"
+                      [id]="'quantity-' + i + '-error'"
+                      data-cy="item-quantity-error"
+                    >
+                      {{ quantityError }}
+                    </p>
+                  }
+                </div>
+
+                @let priceError = fieldError(item.controls.unitPrice);
+                <div class="field item__price">
+                  <label class="field__label" [for]="'price-' + i">Unit price</label>
+                  <input
+                    class="field__control"
+                    type="number"
+                    inputmode="decimal"
+                    min="0"
+                    step="0.01"
+                    [id]="'price-' + i"
+                    formControlName="unitPrice"
+                    [attr.aria-invalid]="priceError ? 'true' : null"
+                    [attr.aria-errormessage]="priceError ? 'price-' + i + '-error' : null"
+                    data-cy="item-unit-price"
+                  />
+                  @if (priceError) {
+                    <p
+                      class="field__error"
+                      [id]="'price-' + i + '-error'"
+                      data-cy="item-unit-price-error"
+                    >
+                      {{ priceError }}
+                    </p>
+                  }
+                </div>
+
+                <div class="item__total">
+                  <span class="field__label">Line total</span>
+                  <span class="item__total-value" data-cy="item-line-total">
+                    @let total = lineTotal(item);
+                    @if (total === null) {
+                      <span aria-hidden="true">–</span
+                      ><span class="visually-hidden">Not available yet</span>
+                    } @else {
+                      {{ total }} {{ currencyLabel }}
+                    }
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  class="btn btn--ghost item__remove"
+                  [disabled]="items.length === 1"
+                  [attr.aria-label]="'Remove line ' + (i + 1)"
+                  data-cy="item-remove"
+                  (click)="removeItem(i)"
+                >
+                  Remove
+                </button>
+              </fieldset>
+            </li>
+          }
+        </ol>
+
+        <button type="button" class="btn btn--secondary" data-cy="item-add" (click)="addItem()">
+          Add line
+        </button>
+      </section>
+
+      <div class="card order-form__footer">
+        <p class="order-form__total" aria-live="polite">
+          Order total:
+          <strong data-cy="order-total">
+            @let total = orderTotal;
+            @if (total === null) {
+              <span aria-hidden="true">–</span
+              ><span class="visually-hidden">Not available until every line is valid</span>
+            } @else {
+              {{ total }} {{ currencyLabel }}
+            }
+          </strong>
+        </p>
+        <button type="submit" class="btn btn--primary" data-cy="create-order-submit">
+          {{ submitting ? 'Saving…' : 'Create order' }}
+        </button>
+      </div>
+    </fieldset>
+  </form>
+</section>

@@ -1,0 +1,80 @@
+<section class="card" aria-labelledby="order-details-heading" data-cy="order-summary">
+  <h2 id="order-details-heading" class="card__title">Order {{ order.id }}</h2>
+  <dl class="details">
+    <div>
+      <dt class="details__term">Order number</dt>
+      <dd class="details__value" data-cy="order-id">{{ order.id }}</dd>
+    </div>
+    <div>
+      <dt class="details__term">Customer number</dt>
+      <dd class="details__value" data-cy="order-customer-id">{{ order.customerId }}</dd>
+    </div>
+    <div>
+      <dt class="details__term">Order date (UTC)</dt>
+      <dd class="details__value" data-cy="order-date">
+        <time [attr.datetime]="orderDate.toISOString()">{{
+          orderDate | date: 'd MMM y, HH:mm' : 'UTC'
+        }}</time>
+      </dd>
+    </div>
+    <div>
+      <dt class="details__term">Status</dt>
+      <dd class="details__value" data-cy="order-status">{{ order.status }}</dd>
+    </div>
+    <div>
+      <dt class="details__term">Currency</dt>
+      <dd class="details__value" data-cy="order-currency">{{ order.currency }}</dd>
+    </div>
+    <div>
+      <dt class="details__term">Total</dt>
+      <dd class="details__value" data-cy="order-total-value">
+        {{ formatAmount(order.total) }} {{ order.currency }}
+      </dd>
+    </div>
+  </dl>
+</section>
+
+<section class="card" aria-labelledby="order-items-heading">
+  <h2 id="order-items-heading" class="card__title">
+    Items
+    <span class="order-summary__count"
+      >({{ order.items.length }} lines, {{ unitCount }} units)</span
+    >
+  </h2>
+  <div class="table-wrap" role="region" aria-labelledby="order-items-heading" tabindex="0">
+    <table class="table" data-cy="order-items-table">
+      <thead>
+        <tr>
+          <th scope="col">SKU</th>
+          <th scope="col">Description</th>
+          <th scope="col" class="num">Quantity</th>
+          <th scope="col" class="num">Unit price</th>
+          <th scope="col" class="num">Line total</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (item of order.items; track item.id) {
+          <tr data-cy="order-item-row">
+            <th scope="row" data-cy="order-item-sku">{{ item.sku }}</th>
+            <td data-cy="order-item-description">
+              @if (item.description) {
+                {{ item.description }}
+              } @else {
+                <span class="table__sub">No description</span>
+              }
+            </td>
+            <td class="num" data-cy="order-item-quantity">{{ item.quantity | number }}</td>
+            <td class="num" data-cy="order-item-unit-price">{{ formatAmount(item.unitPrice) }}</td>
+            <td class="num" data-cy="order-item-line-total">{{ formatAmount(item.lineTotal) }}</td>
+          </tr>
+        }
+      </tbody>
+      <tfoot>
+        <tr>
+          <th scope="row" colspan="4" class="num">Total ({{ order.currency }})</th>
+          <td class="num" data-cy="order-items-total">{{ formatAmount(order.total) }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</section>
