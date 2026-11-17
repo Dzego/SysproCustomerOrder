@@ -68,7 +68,7 @@ Each script stops at the first problem with a message saying what is missing.
 - The fixture has 9 lines: customers `E2E0000001` to `E2E0000006`, one invalid tier,
   one invalid date, and one duplicate id. Importing it gives 9 processed, 6 created
   or updated, and 3 rejected, however many times it runs.
-- Orders use a run id in their SKU and status, so one run's data can be told apart
+- Orders use a run id in their SKU, so one run's data can be told apart
   from another's.
 - Totals are checked as differences (total after minus total before), so the suite
   passes on a database that earlier runs have used. Reset it for a clean start.

@@ -41,13 +41,14 @@ describe('Orders (real API and SQL Server)', () => {
   };
 
   it('creates an order with several lines, and it can be read back unchanged', () => {
-    const status = `E2E ${RUN_ID}`;
+    // The form offers a fixed list; the SKUs carry the run id instead.
+    const status = 'Shipped';
 
     cy.visit('/orders/new');
     cy.getByCy('legacy-customer-id').type('E2E0000002');
     cy.getByCy('customer-match').should('have.text', 'E2E Bravo Traders');
     cy.getByCy('currency').clear().type('eur');
-    cy.getByCy('status').clear().type(status);
+    cy.getByCy('status').select(status);
     line(0, `${RUN_ID}-A`, 'Widget', '3', '19.99');
     cy.getByCy('item-add').click();
     line(1, `${RUN_ID}-B`, 'Washer', '3', '0.10');

@@ -2,6 +2,8 @@ import { FormControl } from '@angular/forms';
 
 import { normalizeFieldErrors } from '../../../core/api/validation-errors';
 import {
+  ORDER_STATUSES,
+  OrderStatus,
   applyCustomerMode,
   applyServerErrors,
   createItemGroup,
@@ -17,7 +19,7 @@ function validForm() {
   const form = createOrderForm();
   form.controls.legacyCustomerId.setValue(' 0000012345 ');
   form.controls.currency.setValue('zar');
-  form.controls.status.setValue(' Pending ');
+  form.controls.status.setValue('Shipped');
   form.controls.items
     .at(0)
     .setValue({ sku: ' SKU-1 ', description: ' Widget ', quantity: 3, unitPrice: 19.99 });
@@ -51,9 +53,29 @@ describe('order form', () => {
     expect(request).toEqual({
       legacyCustomerId: '0000012345',
       currency: 'ZAR',
-      status: 'Pending',
+      status: 'Shipped',
       items: [{ sku: 'SKU-1', description: 'Widget', quantity: 3, unitPrice: 19.99 }],
     });
+  });
+
+  it('accepts each listed status and rejects any other value', () => {
+    // Arrange
+    const form = validForm();
+    const status = form.controls.status;
+
+    // Act and assert: every listed status is valid.
+    for (const value of ORDER_STATUSES) {
+      status.setValue(value);
+      expect(status.errors).toBeNull();
+    }
+
+    // The API would accept these, but the select cannot show them.
+    for (const value of ['Created', 'pending', '']) {
+      status.setValue(value as OrderStatus);
+      expect(status.errors).toEqual({ orderStatus: true });
+      expect(errorMessage(status.errors)).toBe('Choose one of the listed statuses.');
+      expect(form.valid).toBe(false);
+    }
   });
 
   it('sends only the identifier for the chosen mode', () => {

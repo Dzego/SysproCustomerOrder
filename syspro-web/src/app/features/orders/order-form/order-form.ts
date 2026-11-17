@@ -25,7 +25,6 @@ import { toCents } from '../../../shared/money/money';
  */
 export const ORDER_LIMITS = {
   legacyCustomerIdMaxLength: 10,
-  statusMaxLength: 30,
   skuMaxLength: 50,
   descriptionMaxLength: 200,
   maxInt: MAX_INT,
@@ -35,6 +34,21 @@ export const ORDER_LIMITS = {
    */
   maxUnitPrice: 999_999_999_999.99,
 } as const;
+
+/**
+ * The statuses a new order can be given. The API accepts any text up to 30
+ * characters, so this list is the frontend's choice: orders created through the
+ * API directly may carry other statuses, and the order pages show them as sent.
+ */
+export const ORDER_STATUSES = [
+  'Pending',
+  'Confirmed',
+  'Shipped',
+  'Completed',
+  'Cancelled',
+] as const;
+
+export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 export type CustomerMode = 'id' | 'legacy';
 
@@ -50,9 +64,16 @@ export interface CreateOrderForm {
   customerId: FormControl<number | null>;
   legacyCustomerId: FormControl<string>;
   currency: FormControl<string>;
-  status: FormControl<string>;
+  status: FormControl<OrderStatus>;
   items: FormArray<FormGroup<OrderItemForm>>;
 }
+
+/**
+ * One of ORDER_STATUSES. A select whose value matches none of its options shows
+ * nothing, so this stops the form from sending a status the user cannot see.
+ */
+export const orderStatus: ValidatorFn = (control: AbstractControl<string>) =>
+  (ORDER_STATUSES as readonly string[]).includes(control.value) ? null : { orderStatus: true };
 
 /** Three letters, as the API's ^[A-Za-z]{3}\z pattern requires. */
 export const currencyCode: ValidatorFn = (control: AbstractControl<string>) =>
@@ -118,9 +139,9 @@ export function createOrderForm(): FormGroup<CreateOrderForm> {
       nonNullable: true,
       validators: [requiredText, currencyCode],
     }),
-    status: new FormControl('Pending', {
+    status: new FormControl<OrderStatus>('Pending', {
       nonNullable: true,
-      validators: [requiredText, trimmedMaxLength(ORDER_LIMITS.statusMaxLength)],
+      validators: [orderStatus],
     }),
     items: new FormArray([createItemGroup()], { validators: [atLeastOneItem] }),
   });
@@ -149,7 +170,7 @@ export function toCreateOrderRequest(form: FormGroup<CreateOrderForm>): CreateOr
       ? { customerId: value.customerId }
       : { legacyCustomerId: value.legacyCustomerId.trim() }),
     currency: value.currency.trim().toUpperCase(),
-    status: value.status.trim(),
+    status: value.status,
     items: value.items.map((item) => ({
       sku: item.sku.trim(),
       description: item.description.trim(),
@@ -174,6 +195,10 @@ export function errorMessage(errors: ValidationErrors | null): string | null {
 
   if (errors['currencyCode']) {
     return 'Enter a three-letter currency code, such as ZAR.';
+  }
+
+  if (errors['orderStatus']) {
+    return 'Choose one of the listed statuses.';
   }
 
   if (errors['min']) {

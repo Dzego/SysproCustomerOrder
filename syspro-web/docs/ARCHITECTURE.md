@@ -108,7 +108,7 @@ validators and column sizes:
 |---|---|---|
 | Customer | Customer number (int ≥ 1) **or** legacy id (1–10 chars, not blank) | `CustomerId` or `LegacyCustomerId`; 404 if no customer matches |
 | Currency | Three letters, sent upper-case | `^[A-Za-z]{3}\z` |
-| Status | Required, ≤ 30 chars, free text | `NotEmpty`, `MaximumLength(30)` |
+| Status | One of Pending, Confirmed, Shipped, Completed, Cancelled (a select) | `NotEmpty`, `MaximumLength(30)`: any text |
 | Lines | At least one | `NotEmpty` |
 | SKU | Required, ≤ 50 | `NotEmpty`, `MaximumLength(50)` |
 | Description | Optional, ≤ 200 | `NotNull`, `MaximumLength(200)` |
@@ -116,7 +116,9 @@ validators and column sizes:
 | Unit price | ≥ 0, at most 2 decimals, ≤ 999,999,999,999.99 | `≥ 0`, `decimal(18,2)` |
 
 The unit price limit is stricter than the API's on purpose: a JavaScript
-`number` holds about 15 significant digits exactly.
+`number` holds about 15 significant digits exactly. The status list is stricter
+too: the API accepts any text, so an order created through it directly can carry
+a status the form does not offer, and the order pages show it unchanged.
 
 Server validation errors (`ValidationProblemDetails`) are mapped back to the
 matching control, including `Items[1].Quantity` lines, by

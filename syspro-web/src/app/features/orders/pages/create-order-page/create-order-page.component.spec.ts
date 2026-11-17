@@ -46,6 +46,13 @@ describe('CreateOrderPageComponent', () => {
     fixture.detectChanges();
   };
 
+  /** Picks an option the way a browser does: set the value, then fire change. */
+  const choose = (element: HTMLSelectElement, value: string): void => {
+    element.value = value;
+    element.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+  };
+
   const fillValidOrder = (): void => {
     type(query('legacy-customer-id'), '0000012345');
     type(query('item-sku'), 'SKU-1');
@@ -123,6 +130,47 @@ describe('CreateOrderPageComponent', () => {
     expect(text('item-unit-price-error')).toBe('This field is required.');
   });
 
+  it('offers the five statuses in a select, with Pending chosen', async () => {
+    setUp();
+
+    const select = query<HTMLSelectElement>('status');
+
+    expect(select.tagName).toBe('SELECT');
+    expect(Array.from(select.options, (option) => option.text.trim())).toEqual([
+      'Pending',
+      'Confirmed',
+      'Shipped',
+      'Completed',
+      'Cancelled',
+    ]);
+    expect(select.value).toBe('Pending');
+    expect(fixture.componentInstance.form.controls.status.value).toBe('Pending');
+  });
+
+  it('keeps every status on offer after one is chosen, and shows the choice', async () => {
+    // Arrange
+    setUp();
+    const select = query<HTMLSelectElement>('status');
+
+    // Act
+    choose(select, 'Confirmed');
+    choose(select, 'Cancelled');
+
+    // Assert: a datalist would have narrowed the options to the current value.
+    expect(fixture.componentInstance.form.controls.status.value).toBe('Cancelled');
+    expect(select.options).toHaveLength(5);
+    expect(select.selectedOptions[0].text.trim()).toBe('Cancelled');
+  });
+
+  it('shows the status chosen in code, as the select follows the form control', async () => {
+    setUp();
+
+    fixture.componentInstance.form.controls.status.setValue('Shipped');
+    fixture.detectChanges();
+
+    expect(query<HTMLSelectElement>('status').value).toBe('Shipped');
+  });
+
   it('adds and removes lines with FormArray, keeping at least one', async () => {
     setUp();
 
@@ -172,7 +220,7 @@ describe('CreateOrderPageComponent', () => {
     // Arrange
     setUp();
     fillValidOrder();
-    type(query('status'), '  Confirmed ');
+    choose(query('status'), 'Confirmed');
     type(query('currency'), 'usd');
 
     // Act

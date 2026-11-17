@@ -27,7 +27,7 @@ describe('Orders (stubbed API)', () => {
   const fillValidOrder = (): void => {
     cy.getByCy('legacy-customer-id').type('T000000011');
     cy.getByCy('currency').clear().type('usd');
-    cy.getByCy('status').clear().type('Confirmed');
+    cy.getByCy('status').select('Confirmed');
     fillLine(0, 'SKU-1', '3', '19.99', 'Widget');
     cy.getByCy('item-add').click();
     fillLine(1, 'SKU-2', '3', '0.1', 'Washer');

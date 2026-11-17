@@ -209,27 +209,18 @@
           @let statusError = fieldError(form.controls.status);
           <div class="field">
             <label class="field__label" for="status">Status</label>
-            <input
+            <select
               id="status"
               class="field__control"
               formControlName="status"
-              list="status-options"
-              autocomplete="off"
-              [attr.maxlength]="limits.statusMaxLength"
-              aria-describedby="status-hint"
               [attr.aria-invalid]="statusError ? 'true' : null"
               [attr.aria-errormessage]="statusError ? 'status-error' : null"
               data-cy="status"
-            />
-            <datalist id="status-options">
+            >
               @for (status of statuses; track status) {
-                <option [value]="status"></option>
+                <option [value]="status">{{ status }}</option>
               }
-            </datalist>
-            <p id="status-hint" class="field__hint">
-              Free text, up to {{ limits.statusMaxLength }} characters. The suggestions are common
-              values.
-            </p>
+            </select>
             @if (statusError) {
               <p class="field__error" id="status-error" data-cy="status-error">{{ statusError }}</p>
             }

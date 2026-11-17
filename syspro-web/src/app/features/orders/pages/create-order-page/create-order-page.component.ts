@@ -32,6 +32,7 @@ import {
   CreateOrderForm,
   CustomerMode,
   ORDER_LIMITS,
+  ORDER_STATUSES,
   OrderItemForm,
   applyCustomerMode,
   applyServerErrors,
@@ -68,7 +69,7 @@ export class CreateOrderPageComponent {
   readonly form: FormGroup<CreateOrderForm> = createOrderForm();
   readonly limits = ORDER_LIMITS;
   readonly currencies = ['ZAR', 'USD', 'EUR', 'GBP'] as const;
-  readonly statuses = ['Pending', 'Confirmed', 'Shipped', 'Completed', 'Cancelled'] as const;
+  readonly statuses = ORDER_STATUSES;
   readonly errorMessage = errorMessage;
   readonly isRetryable = isRetryable;
   readonly noMatch: CustomerMatch = { status: 'none' };
